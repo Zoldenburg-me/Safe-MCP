@@ -19,6 +19,16 @@ approaches.
 > deadline-timed cadence, but inverts the control flow: the connected agent is
 > the decision-maker, so there is no second model and no Postgres to run.
 
+- [How voting works](#how-voting-works)
+- [Setup](#setup)
+- [Which account needs ETH](#which-account-needs-eth)
+- [Tools](#tools)
+- [Vote log](#vote-log)
+- [Unattended voting](#unattended-voting)
+- [Guardrails](#guardrails)
+- [Development](#development)
+- [Troubleshooting](#troubleshooting)
+
 ## How voting works
 
 **Snapshot (off-chain, gasless).** The Safe cannot sign an EIP-712 payload
@@ -35,10 +45,10 @@ Safe must not have voted already, and it must have had voting power at the
 proposal's snapshot.
 
 Proposals are discovered by reading `ProposalCreated` logs from the Governor
-contract, so there is no third-party indexer anywhere in the path. That matters:
+contract, so no third-party indexer sits anywhere in the path. That matters:
 [Tally shut down in March 2026](https://thedefiant.io/news/defi/tally-dao-governance-platform-shuts-down-38m3d2)
-and the platform is now Cactus, run by ScopeLift. The hosted-API tools are kept
-as a legacy fallback but nothing depends on them.
+and the platform is now Cactus, run by ScopeLift. The hosted-API tools remain as
+a legacy fallback, but nothing depends on them.
 
 The EIP-712 vote types match `@snapshot-labs/snapshot.js` field for field,
 including the three distinct shapes Snapshot uses (`uint32` for single-choice
@@ -158,15 +168,15 @@ To poke at the server directly:
 npm run inspect
 ```
 
-### Which account needs ETH
+## Which account needs ETH
 
 The Safe does not pay gas for its own votes. The account that calls
 `execTransaction` pays, and that is the agent's EOA. Funding the Safe instead is
 the common mistake and does nothing for voting.
 
-| | Needs ETH | Why |
+| Case | Needs ETH | Why |
 | --- | --- | --- |
-| Snapshot votes | Nothing | Signing is off-chain and verification is an `eth_call`. Entirely gasless. |
+| Snapshot votes | No | Signing is off-chain and verification is an `eth_call`. Entirely gasless. |
 | Governor votes | The agent EOA | It submits `execTransaction` and pays the gas. |
 | The Safe itself | No | Only the governance token, or a delegation, for voting power. |
 
@@ -328,7 +338,7 @@ is why one definition covers both OpenZeppelin and Compound Bravo.
 ## Guardrails
 
 An agent with a Safe owner key is a real capability, so the server constrains it
-in four ways:
+in five ways:
 
 - **`ALLOWED_SNAPSHOT_SPACES` and `ALLOWED_GOVERNORS`** confine voting to named
   spaces and contracts. Anything else is refused before a signature is made.
@@ -339,7 +349,6 @@ in four ways:
   closed proposals, zero voting power, a Governor proposal already voted on.
 - **The Safe's own threshold** stays authoritative. Nothing here can execute
   past it.
-
 - **The vote log** makes every attempt reviewable after the fact, including the
   ones that failed.
 
@@ -396,6 +405,7 @@ src/
     snapshotTools.ts  snapshot_*
     governorTools.ts  governor_*
     logTools.ts       vote_log, vote_schedule
+    shared.ts         Tool result helpers and the in-band error guard
 ```
 
 ## Troubleshooting
