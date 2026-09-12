@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { loadDotEnv } from "./dotenv.js";
 import { loadConfig } from "./config.js";
 import { formatDuration, parseDuration } from "./duration.js";
 import { getChainName } from "./chains.js";
@@ -26,6 +27,8 @@ async function main(): Promise<void> {
 
   const planOnly = args.has("--plan");
   const once = args.has("--once");
+  loadDotEnv();
+
   const config = loadConfig();
 
   if (

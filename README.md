@@ -57,9 +57,39 @@ npm install
 npm run build
 ```
 
-### 2. Make the agent an owner of the Safe
+### 2. Run setup
 
-Create a fresh EOA for the agent and add it as an owner in the Safe UI. The
+There is no web UI to pick a Safe in. Safe-MPC is a headless stdio process, so
+this command is the setup screen:
+
+```bash
+npm run setup
+```
+
+It generates the agent's EOA, shows you the address to add as a Safe owner,
+asks for the Safe and chain, and writes `.env` with mode 600 and `DRY_RUN=true`.
+For scripts and containers there is a non-interactive form:
+
+```bash
+node dist/setup.js --safe 0xYourSafe --chain 1 --rpc https://... --api-key ...
+node dist/setup.js --new-key      # just print a fresh keypair, write nothing
+npm run check                     # verify readiness against the live chain
+```
+
+`npm run check` is worth running before you wire up any agent. It reports the
+chain, both addresses, the agent's ETH balance, whether the agent is an owner,
+the threshold, and, if a Safe API key is set, every Safe the agent owns on that
+chain. It exits non-zero and names what is missing when the agent cannot vote.
+
+The server and the watcher both read `.env` from the working directory and then
+from the package root, so you do not have to repeat the config in your MCP
+client. Real environment variables always win over the file.
+
+### 3. Add the agent as a Safe owner
+
+Setup prints the agent address. Add it at
+[app.safe.global](https://app.safe.global), under Settings, then Setup, then Add
+new owner. That is the only screen involved, and it is Safe's, not ours. The
 agent key never holds the treasury — it only signs.
 
 The Safe's **threshold** decides how much the agent can do alone:
@@ -72,55 +102,30 @@ The Safe's **threshold** decides how much the agent can do alone:
 A 1-of-N Safe gives the agent full autonomy. Raise the threshold to put a human
 in the loop without changing anything here.
 
-### Which account needs ETH
+### 4. Configure the rest
 
-The Safe does not pay gas for its own votes. The account that calls
-`execTransaction` pays, and that is the agent's EOA. Funding the Safe instead is
-the common mistake and does nothing for voting.
-
-| | Needs ETH | Why |
-| --- | --- | --- |
-| Snapshot votes | Nothing | Signing is off-chain and verification is an `eth_call`. Entirely gasless. |
-| Governor votes | The agent EOA | It submits `execTransaction` and pays the gas. |
-| The Safe itself | No | Only the governance token, or a delegation, for voting power. |
-
-So a Safe voting only on Snapshot needs no ETH anywhere. For on-chain voting,
-send a small amount of ETH to the agent EOA and top it up as it drains.
-
-`safe_info` reports both balances and says plainly whether on-chain voting will
-work. `governor_vote` refuses before signing if the agent has no ETH, naming the
-cause rather than surfacing an opaque RPC rejection.
-
-Safe supports refunding the executor out of the Safe's own balance, via the
-`gasPrice`, `gasToken` and `refundReceiver` transaction fields. Safe-MPC leaves
-those at zero, so no refund happens and the accounting stays simple.
-
-### 3. Configure
-
-```bash
-cp .env.example .env
-```
-
-Set `SAFE_ADDRESS`, `SAFE_AGENT_PRIVATE_KEY`, `SAFE_CHAIN_ID`, and an
-`SAFE_RPC_URL` you control. Snapshot voting also needs a `SAFE_API_KEY` from
+Setup writes the essentials. `.env.example` documents every other setting, and
+`cp .env.example .env` is the manual route if you would rather not use setup at
+all. Snapshot voting needs a `SAFE_API_KEY` from
 [developer.safe.global](https://developer.safe.global), because the Safe message
 service assembles the EIP-1271 signature.
 
-**Run with `DRY_RUN=true` first.** Every vote tool then returns the exact payload
-it would have submitted and signs nothing.
+**Setup leaves `DRY_RUN=true`.** Every vote tool returns the exact payload it
+would have submitted and signs nothing. Turn it off once you have watched a dry
+run and are happy.
 
-### 4. Write a voting policy
+### 5. Write a voting policy
 
 Drop your operating values into `knowledge/` as Markdown. Those files are served
 as MCP resources and inlined into the voting prompts, so the agent votes to a
 stated policy rather than improvising. See `knowledge/README.md`.
 
-### 5. Connect an agent
+### 6. Connect an agent
 
-Claude Code:
+Claude Code, which picks up the project's `.env` on its own:
 
 ```bash
-claude mcp add safe-mpc --env-file .env -- node /absolute/path/to/Safe-MPC/dist/index.js
+claude mcp add safe-mpc -- node /absolute/path/to/Safe-MPC/dist/index.js
 ```
 
 Claude Desktop or Cursor, in the MCP config file:
@@ -152,6 +157,29 @@ To poke at the server directly:
 ```bash
 npm run inspect
 ```
+
+### Which account needs ETH
+
+The Safe does not pay gas for its own votes. The account that calls
+`execTransaction` pays, and that is the agent's EOA. Funding the Safe instead is
+the common mistake and does nothing for voting.
+
+| | Needs ETH | Why |
+| --- | --- | --- |
+| Snapshot votes | Nothing | Signing is off-chain and verification is an `eth_call`. Entirely gasless. |
+| Governor votes | The agent EOA | It submits `execTransaction` and pays the gas. |
+| The Safe itself | No | Only the governance token, or a delegation, for voting power. |
+
+So a Safe voting only on Snapshot needs no ETH anywhere. For on-chain voting,
+send a small amount of ETH to the agent EOA and top it up as it drains.
+
+`safe_info` reports both balances and says plainly whether on-chain voting will
+work. `governor_vote` refuses before signing if the agent has no ETH, naming the
+cause rather than surfacing an opaque RPC rejection.
+
+Safe supports refunding the executor out of the Safe's own balance, via the
+`gasPrice`, `gasToken` and `refundReceiver` transaction fields. Safe-MPC leaves
+those at zero, so no refund happens and the accounting stays simple.
 
 ## Tools
 
@@ -349,6 +377,8 @@ src/
   config.ts           Environment validation and the allowlist guards
   chains.ts           Chain registry and RPC resolution
   safe.ts             Safe client construction and owner checks
+  setup.ts            safe-mpc-setup CLI: key generation, .env, readiness check
+  dotenv.ts           Minimal .env loader, so config is not duplicated per client
   policy.ts           Reads the voting-policy documents
   prompts.ts          Prompts and policy resources
   voteLog.ts          Append-only JSONL record of every vote attempt

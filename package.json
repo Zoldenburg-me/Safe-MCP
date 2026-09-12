@@ -5,7 +5,8 @@
   "type": "module",
   "bin": {
     "safe-mpc": "dist/index.js",
-    "safe-mpc-watch": "dist/watch.js"
+    "safe-mpc-watch": "dist/watch.js",
+    "safe-mpc-setup": "dist/setup.js"
   },
   "main": "dist/index.js",
   "files": [
@@ -23,7 +24,10 @@
     "inspect": "npx @modelcontextprotocol/inspector node dist/index.js",
     "test": "tsx --test test/*.test.ts",
     "watch": "node dist/watch.js",
-    "watch:plan": "node dist/watch.js --plan"
+    "watch:plan": "node dist/watch.js --plan",
+    "setup": "node dist/setup.js",
+    "check": "node dist/setup.js --check",
+    "new-key": "node dist/setup.js --new-key"
   },
   "keywords": [
     "mcp",
