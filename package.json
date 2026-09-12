@@ -1,0 +1,52 @@
+{
+  "name": "safe-mpc",
+  "version": "0.1.0",
+  "description": "Model Context Protocol server that connects a Safe wallet to AI agents so they can read and vote on Snapshot and on-chain Governor proposals.",
+  "type": "module",
+  "bin": {
+    "safe-mpc": "dist/index.js"
+  },
+  "main": "dist/index.js",
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "dev": "tsx watch src/index.ts",
+    "start": "node dist/index.js",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "inspect": "npx @modelcontextprotocol/inspector node dist/index.js",
+    "test": "tsx --test test/*.test.ts"
+  },
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "safe",
+    "safe-wallet",
+    "dao",
+    "governance",
+    "snapshot",
+    "tally",
+    "ai-agent"
+  ],
+  "license": "MIT",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.30.0",
+    "@safe-global/api-kit": "^5.0.3",
+    "@safe-global/protocol-kit": "^8.0.7",
+    "@safe-global/sdk-starter-kit": "^4.1.1",
+    "@safe-global/types-kit": "^4.0.1",
+    "viem": "^2.52.2",
+    "zod": "^4.6.2"
+  },
+  "devDependencies": {
+    "@ethersproject/hash": "^5.8.0",
+    "@types/node": "^22.10.0",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2"
+  }
+}
