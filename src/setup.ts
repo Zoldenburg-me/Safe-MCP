@@ -227,8 +227,11 @@ async function writeEnv(options: EnvOptions): Promise<void> {
     "# ALLOWED_SNAPSHOT_SPACES=",
     "# ALLOWED_GOVERNORS=",
     "",
-    "KNOWLEDGE_DIR=knowledge",
-    "VOTE_LOG_PATH=data/votes.jsonl",
+    "# Absolute, because an MCP client spawns the server from its own working",
+    "# directory and these would otherwise resolve somewhere unexpected.",
+    `KNOWLEDGE_DIR=${join(packageRoot(), "knowledge")}`,
+    `VOTE_LOG_PATH=${join(packageRoot(), "data", "votes.jsonl")}`,
+    `SCHEDULE_PATH=${join(packageRoot(), "data", "schedule.json")}`,
     "",
   ];
 
