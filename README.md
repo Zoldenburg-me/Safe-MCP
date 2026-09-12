@@ -13,11 +13,15 @@ it to vote. **Unattended**, with the bundled `safe-mpc-watch` scheduler, which
 polls for new proposals and asks an agent to decide as each deadline
 approaches.
 
-> Successor to [MinervaV2](https://github.com/DAOplomats/minervaV2). Minerva was
-> a standing backend that polled for proposals, decided with its own LLM call,
-> and voted on a schedule. Safe-MPC keeps Minerva's proven signing paths and its
-> deadline-timed cadence, but inverts the control flow: the connected agent is
-> the decision-maker, so there is no second model and no Postgres to run.
+- [How voting works](#how-voting-works)
+- [Setup](#setup)
+- [Which account needs ETH](#which-account-needs-eth)
+- [Tools](#tools)
+- [Vote log](#vote-log)
+- [Unattended voting](#unattended-voting)
+- [Guardrails](#guardrails)
+- [Development](#development)
+- [Troubleshooting](#troubleshooting)
 
 ## How voting works
 
@@ -35,10 +39,9 @@ Safe must not have voted already, and it must have had voting power at the
 proposal's snapshot.
 
 Proposals are discovered by reading `ProposalCreated` logs from the Governor
-contract, so there is no third-party indexer anywhere in the path. That matters:
-[Tally shut down in March 2026](https://thedefiant.io/news/defi/tally-dao-governance-platform-shuts-down-38m3d2)
-and the platform is now Cactus, run by ScopeLift. The hosted-API tools are kept
-as a legacy fallback but nothing depends on them.
+contract, so no third-party indexer sits anywhere in the path, and no API key is
+needed to find a proposal. Nothing here depends on a hosted governance API
+staying up.
 
 The EIP-712 vote types match `@snapshot-labs/snapshot.js` field for field,
 including the three distinct shapes Snapshot uses (`uint32` for single-choice
@@ -173,15 +176,15 @@ Step-by-step guides for hosting the server beside a self-hosted agent:
 - [docs/grokbot.md](docs/grokbot.md) — Grok Build over stdio, and why Grok Bot
   needs a hosted endpoint this repo does not ship yet.
 
-### Which account needs ETH
+## Which account needs ETH
 
 The Safe does not pay gas for its own votes. The account that calls
 `execTransaction` pays, and that is the agent's EOA. Funding the Safe instead is
 the common mistake and does nothing for voting.
 
-| | Needs ETH | Why |
+| Case | Needs ETH | Why |
 | --- | --- | --- |
-| Snapshot votes | Nothing | Signing is off-chain and verification is an `eth_call`. Entirely gasless. |
+| Snapshot votes | No | Signing is off-chain and verification is an `eth_call`. Entirely gasless. |
 | Governor votes | The agent EOA | It submits `execTransaction` and pays the gas. |
 | The Safe itself | No | Only the governance token, or a delegation, for voting power. |
 
@@ -209,8 +212,8 @@ those at zero, so no refund happens and the accounting stays simple.
 | `snapshot_vote` | write | Casts an off-chain Snapshot vote as the Safe. Needs the API key. |
 | `snapshot_submit_pending_vote` | write | Submits a vote whose Safe message needed more signatures. Needs the API key. |
 | `governor_find_proposals` | read | On-chain proposals, read from `ProposalCreated` logs. No API key. |
-| `governor_list_proposals` | read | Legacy: proposals via the hosted Tally-compatible API. |
-| `governor_get_proposal` | read | Legacy: title, description and tallies via the hosted API. |
+| `governor_list_proposals` | read | Legacy: proposals via a hosted indexer API. Needs a key. |
+| `governor_get_proposal` | read | Legacy: title, description and vote counts via the same API. |
 | `governor_proposal_state` | read | Live Governor state, read straight from the contract. No API key needed. |
 | `governor_vote` | write | Casts `castVoteWithReason` on-chain from the Safe. Needs the API key, even at threshold 1. |
 | `vote_log` | read | Every vote this Safe has cast, with the choice and reason, so decisions stay consistent with precedent. |
@@ -257,7 +260,7 @@ jq -r '[.at, .venue, .choice, .outcome] | @tsv' data/votes.jsonl | column -t
 
 ## Unattended voting
 
-`safe-mpc-watch` restores Minerva's cadence. It polls the spaces and DAOs you
+`safe-mpc-watch` is the unattended path. It polls the spaces and DAOs you
 name, queues each open proposal, and when a proposal is within
 `VOTE_BEFORE_CLOSE` of its deadline it runs your agent command to decide and
 vote. Voting late rather than on discovery means the decision reflects how
@@ -347,7 +350,7 @@ is why one definition covers both OpenZeppelin and Compound Bravo.
 ## Guardrails
 
 An agent with a Safe owner key is a real capability, so the server constrains it
-in four ways:
+in five ways:
 
 - **`ALLOWED_SNAPSHOT_SPACES` and `ALLOWED_GOVERNORS`** confine voting to named
   spaces and contracts. Anything else is refused before a signature is made.
@@ -358,7 +361,6 @@ in four ways:
   closed proposals, zero voting power, a Governor proposal already voted on.
 - **The Safe's own threshold** stays authoritative. Nothing here can execute
   past it.
-
 - **The vote log** makes every attempt reviewable after the fact, including the
   ones that failed.
 
@@ -409,12 +411,13 @@ src/
     snapshot.ts       Hub queries, EIP-712 vote types, sequencer submission
     governor.ts       Governor ABI, calldata encoding, on-chain state reads
     governorIndexer.ts  On-chain discovery from ProposalCreated logs
-    tally.ts          Legacy hosted indexer (Tally, now Cactus)
+    tally.ts          Legacy hosted-indexer client, superseded by governorIndexer
   tools/
     safeTools.ts      safe_*
     snapshotTools.ts  snapshot_*
     governorTools.ts  governor_*
     logTools.ts       vote_log, vote_schedule
+    shared.ts         Tool result helpers and the in-band error guard
 ```
 
 ## Troubleshooting
