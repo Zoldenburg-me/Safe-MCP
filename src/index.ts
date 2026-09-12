@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+import { loadDotEnv } from "./dotenv.js";
 import { loadConfig } from "./config.js";
 import { getAgentAddress } from "./safe.js";
 import { getChainName } from "./chains.js";
@@ -36,6 +37,8 @@ running.
 `.trim();
 
 async function main(): Promise<void> {
+  loadDotEnv();
+
   const config = loadConfig();
 
   const server = new McpServer(
