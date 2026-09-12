@@ -164,7 +164,7 @@ export async function discoverGovernorOnChain(
 
   for (const governor of config.WATCH_GOVERNORS) {
     try {
-      const proposals = await indexer.findProposals(config, {
+      const { proposals, lookback } = await indexer.findProposals(config, {
         governor: governor as `0x${string}`,
         states: ["Pending", "Active"],
       });
@@ -180,9 +180,10 @@ export async function discoverGovernorOnChain(
       }
 
       log(
-        `governor ${governor}: ${proposals.length} open proposal(s)` +
+        `governor ${governor}: ${proposals.length} open proposal(s); ` +
+          `scan window ${lookback.detail}` +
           (proposals.some((p) => p.endsAtIsEstimate)
-            ? " (deadlines estimated from block time)"
+            ? "; deadlines estimated from block time"
             : "")
       );
     } catch (error) {

@@ -1,7 +1,7 @@
 import { parseAbiItem, type Address, type PublicClient } from "viem";
 import { getPublicClient } from "../safe.js";
 import { GOVERNOR_ABI, PROPOSAL_STATES } from "./governor.js";
-import { parseDuration } from "../duration.js";
+import { formatDuration, parseDuration } from "../duration.js";
 import type { Config } from "../config.js";
 
 /**
@@ -122,6 +122,103 @@ export async function timepointToDate(
   };
 }
 
+/**
+ * How far back a scan must reach to still catch an open proposal: the longest a
+ * proposal can sit between creation and its deadline, which is exactly
+ * votingDelay + votingPeriod, plus a margin.
+ *
+ * Both values are in the Governor's own clock units, so they are blocks or
+ * seconds depending on its ERC-6372 mode.
+ */
+export function lookbackFromGovernorClock(args: {
+  votingDelay: bigint;
+  votingPeriod: bigint;
+  mode: ClockMode;
+  secondsPerBlock: number;
+  marginMs: number;
+}): number {
+  const units = Number(args.votingDelay) + Number(args.votingPeriod);
+
+  if (!Number.isFinite(units) || units <= 0) {
+    throw new Error("The Governor reported a non-positive voting window.");
+  }
+
+  const seconds = args.mode === "timestamp" ? units : units * args.secondsPerBlock;
+
+  return Math.ceil(seconds * 1_000) + args.marginMs;
+}
+
+export interface ResolvedLookback {
+  ms: number;
+  /** Where the window came from, so the caller can explain it. */
+  source: "explicit" | "contract" | "fallback";
+  detail: string;
+}
+
+/**
+ * Works out the scan window. Asking the Governor beats guessing: a DAO with a
+ * three-day voting period needs a three-day scan, not a fixed month of logs.
+ */
+export async function resolveLookback(
+  config: Config,
+  client: PublicClient,
+  governor: Address,
+  mode: ClockMode,
+  perBlock: number,
+  override?: string
+): Promise<ResolvedLookback> {
+  if (override) {
+    return {
+      ms: parseDuration(override),
+      source: "explicit",
+      detail: `lookback of ${override} given explicitly`,
+    };
+  }
+
+  try {
+    const [votingDelay, votingPeriod] = await Promise.all([
+      client.readContract({
+        address: governor,
+        abi: GOVERNOR_ABI,
+        functionName: "votingDelay",
+      }),
+      client.readContract({
+        address: governor,
+        abi: GOVERNOR_ABI,
+        functionName: "votingPeriod",
+      }),
+    ]);
+
+    const marginMs = parseDuration(config.GOVERNOR_LOOKBACK_MARGIN);
+    const ms = lookbackFromGovernorClock({
+      votingDelay,
+      votingPeriod,
+      mode,
+      secondsPerBlock: perBlock,
+      marginMs,
+    });
+
+    const unit = mode === "timestamp" ? "seconds" : "blocks";
+
+    return {
+      ms,
+      source: "contract",
+      detail:
+        `derived from the Governor: votingDelay ${votingDelay} + votingPeriod ` +
+        `${votingPeriod} ${unit}, plus a ${config.GOVERNOR_LOOKBACK_MARGIN} margin`,
+    };
+  } catch {
+    // A Governor fork without votingDelay/votingPeriod, so fall back to config.
+    return {
+      ms: parseDuration(config.GOVERNOR_LOOKBACK),
+      source: "fallback",
+      detail:
+        "this Governor does not expose votingDelay/votingPeriod, so " +
+        `GOVERNOR_LOOKBACK (${config.GOVERNOR_LOOKBACK}) was used`,
+    };
+  }
+}
+
 /** First meaningful line of an OZ proposal description, used as its title. */
 export function titleFromDescription(description: string): string {
   const line = description
@@ -148,26 +245,36 @@ export async function findProposals(
     states?: string[];
     lookback?: string;
   }
-): Promise<OnChainProposal[]> {
+): Promise<{ proposals: OnChainProposal[]; lookback: ResolvedLookback }> {
   const client = getPublicClient(config);
   const chunkSize = BigInt(config.GOVERNOR_LOG_CHUNK_BLOCKS);
-  const lookbackMs = parseDuration(args.lookback ?? config.GOVERNOR_LOOKBACK);
 
-  const [latestBlock, perBlock] = await Promise.all([
+  const [latestBlock, perBlock, mode] = await Promise.all([
     client.getBlockNumber(),
     secondsPerBlock(client, config.SAFE_CHAIN_ID),
+    getClockMode(client, args.governor),
   ]);
 
-  const lookbackBlocks = BigInt(Math.ceil(lookbackMs / 1_000 / perBlock));
+  const lookback = await resolveLookback(
+    config,
+    client,
+    args.governor,
+    mode,
+    perBlock,
+    args.lookback
+  );
+
+  const lookbackBlocks = BigInt(Math.ceil(lookback.ms / 1_000 / perBlock));
   const fromBlock = latestBlock > lookbackBlocks ? latestBlock - lookbackBlocks : 0n;
   const chunks = Number((latestBlock - fromBlock) / chunkSize) + 1;
 
   if (chunks > config.GOVERNOR_MAX_LOG_CHUNKS) {
     throw new Error(
-      `Scanning ${config.GOVERNOR_LOOKBACK} back on this chain needs ${chunks} eth_getLogs ` +
-        `calls, over the GOVERNOR_MAX_LOG_CHUNKS limit of ${config.GOVERNOR_MAX_LOG_CHUNKS}. ` +
-        `At roughly ${perBlock.toFixed(2)}s per block, either shorten GOVERNOR_LOOKBACK or ` +
-        "raise GOVERNOR_LOG_CHUNK_BLOCKS if your RPC provider allows wider ranges."
+      `Scanning ${formatDuration(lookback.ms)} back needs ${chunks} eth_getLogs calls, ` +
+        `over the GOVERNOR_MAX_LOG_CHUNKS limit of ${config.GOVERNOR_MAX_LOG_CHUNKS}. ` +
+        `That window was ${lookback.detail}, at roughly ${perBlock.toFixed(2)}s per block. ` +
+        "Raise GOVERNOR_LOG_CHUNK_BLOCKS if your RPC provider allows wider ranges, or " +
+        "pass a shorter explicit lookback."
     );
   }
 
@@ -187,7 +294,6 @@ export async function findProposals(
   }
 
   const wanted = args.states ?? ["Pending", "Active"];
-  const mode = await getClockMode(client, args.governor);
   const proposals: OnChainProposal[] = [];
 
   for (const entry of logs) {
@@ -238,7 +344,10 @@ export async function findProposals(
     });
   }
 
-  return proposals.sort((a, b) => Number(BigInt(b.voteEnd) - BigInt(a.voteEnd)));
+  return {
+    proposals: proposals.sort((a, b) => Number(BigInt(b.voteEnd) - BigInt(a.voteEnd))),
+    lookback,
+  };
 }
 
 /** Test seam: drop the measured block time and clock-mode caches. */

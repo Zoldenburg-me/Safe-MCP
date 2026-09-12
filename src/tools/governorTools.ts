@@ -46,14 +46,16 @@ export function registerGovernorTools(server: McpServer, config: Config): void {
           .string()
           .optional()
           .describe(
-            'How far back to scan for proposals, e.g. "30d" or "7d". Defaults to ' +
-              "GOVERNOR_LOOKBACK. Longer scans cost more RPC calls."
+            'Override how far back to scan, e.g. "7d". By default the window is ' +
+              "derived from the Governor's own votingDelay and votingPeriod, which " +
+              "is the shortest span that can still contain an open proposal. Only " +
+              "set this if the Governor's parameters changed recently."
           ),
       },
       annotations: { readOnlyHint: true, openWorldHint: true },
     },
     guard(async ({ governor: governorAddress, states, lookback }) => {
-      const proposals = await indexer.findProposals(config, {
+      const { proposals, lookback: window } = await indexer.findProposals(config, {
         governor: getAddress(governorAddress) as Address,
         states,
         ...(lookback ? { lookback } : {}),
@@ -74,9 +76,14 @@ export function registerGovernorTools(server: McpServer, config: Config): void {
       const estimated = rows.some((row) => row.endsAtIsEstimate);
 
       return json(
-        { governor: governorAddress, count: rows.length, proposals: rows },
+        {
+          governor: governorAddress,
+          count: rows.length,
+          scanWindow: { source: window.source, detail: window.detail },
+          proposals: rows,
+        },
         (rows.length === 0
-          ? "No proposals in those states within the lookback window."
+          ? `No proposals in those states. Scanned back ${window.detail}.`
           : `${rows.length} proposal(s).`) +
           (estimated
             ? " This Governor counts time in blocks, so each deadline is estimated from" +
