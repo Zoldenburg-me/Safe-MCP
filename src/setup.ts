@@ -98,7 +98,12 @@ async function check(): Promise<void> {
   console.log(`  RPC            ${resolveRpcUrl(config.SAFE_CHAIN_ID, config.SAFE_RPC_URL)}`);
   console.log(`  Agent signer   ${agent}`);
   console.log(`  Safe           ${config.SAFE_ADDRESS}`);
-  console.log(`  Safe API key   ${config.SAFE_API_KEY ? "set" : "NOT SET (Snapshot voting needs it)"}`);
+  const serviceKey = config.SAFE_API_KEY
+    ? "set"
+    : config.SAFE_TX_SERVICE_URL
+      ? "not set (covered by SAFE_TX_SERVICE_URL)"
+      : "NOT SET — every voting tool will fail, and the server will not start";
+  console.log(`  Safe API key   ${serviceKey}`);
   console.log(`  Dry run        ${config.DRY_RUN ? "on" : "OFF — votes are real"}\n`);
 
   const problems: string[] = [];
