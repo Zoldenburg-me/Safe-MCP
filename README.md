@@ -34,6 +34,12 @@ pre-flight checks against the Governor first: the proposal must be `Active`, the
 Safe must not have voted already, and it must have had voting power at the
 proposal's snapshot.
 
+Proposals are discovered by reading `ProposalCreated` logs from the Governor
+contract, so there is no third-party indexer anywhere in the path. That matters:
+[Tally shut down in March 2026](https://thedefiant.io/news/defi/tally-dao-governance-platform-shuts-down-38m3d2)
+and the platform is now Cactus, run by ScopeLift. The hosted-API tools are kept
+as a legacy fallback but nothing depends on them.
+
 The EIP-712 vote types match `@snapshot-labs/snapshot.js` field for field,
 including the three distinct shapes Snapshot uses (`uint32` for single-choice
 and basic, `uint32[]` for approval and ranked-choice, a JSON string for weighted
@@ -136,8 +142,9 @@ npm run inspect
 | `snapshot_voting_power` | read | The Safe's voting power on one proposal, by strategy. |
 | `snapshot_vote` | write | Casts an off-chain Snapshot vote as the Safe. |
 | `snapshot_submit_pending_vote` | write | Submits a vote whose Safe message needed more signatures. |
-| `governor_list_proposals` | read | On-chain proposals for a DAO, via Tally. |
-| `governor_get_proposal` | read | Title, description and tallies, via Tally. |
+| `governor_find_proposals` | read | On-chain proposals, read from `ProposalCreated` logs. No API key. |
+| `governor_list_proposals` | read | Legacy: proposals via the hosted Tally-compatible API. |
+| `governor_get_proposal` | read | Legacy: title, description and tallies via the hosted API. |
 | `governor_proposal_state` | read | Live Governor state, read straight from the contract. No API key needed. |
 | `governor_vote` | write | Casts `castVoteWithReason` on-chain from the Safe. |
 | `vote_log` | read | Every vote this Safe has cast, with the choice and reason, so decisions stay consistent with precedent. |
@@ -189,7 +196,7 @@ sentiment developed, and leaves room to retry before the deadline.
 ```bash
 # In .env
 WATCH_SNAPSHOT_SPACES=ens.eth,aavedao.eth
-WATCH_TALLY_SLUGS=uniswap
+WATCH_GOVERNORS=0x408ED6354d4973f66138C91495F2f2FCbd8724C3
 VOTE_BEFORE_CLOSE=6h
 POLL_INTERVAL=1h
 AGENT_COMMAND=claude -p "{prompt}" --mcp-config .mcp.json --allowedTools mcp__safe-mpc__*
@@ -228,6 +235,33 @@ Proposal titles are written by whoever submitted the proposal, so they are never
 placed on the command line, only in the environment. Proposal ids and venues are
 checked against a strict character allowlist before substitution, and a
 dispatch is refused outright if either could alter how the command parses.
+
+### On-chain discovery and its limits
+
+`governor_find_proposals` and the scheduler's Governor path both scan
+`ProposalCreated` logs over `GOVERNOR_LOOKBACK`, then filter by the contract's
+live `state()`. Two consequences are worth knowing.
+
+**A proposal created before the lookback window is invisible**, even if it is
+still open. Keep `GOVERNOR_LOOKBACK` comfortably longer than the longest voting
+period you care about.
+
+**Deadlines are estimated on a Governor that counts in blocks.** OpenZeppelin
+Governor v5 and later can report time in seconds via ERC-6372, and those
+deadlines are exact. Older Governors and Compound Bravo count in block numbers,
+so the deadline is derived from the chain's recent average block time, measured
+by sampling two blocks rather than from a hardcoded table. Results flag this
+with `endsAtIsEstimate`, and the estimate drifts as block times change. Leave
+enough room in `VOTE_BEFORE_CLOSE` to absorb that drift.
+
+Scans are chunked because most RPC providers cap the block span of a single
+`eth_getLogs` call. On a fast chain a long lookback becomes a lot of calls, so
+a scan needing more than `GOVERNOR_MAX_LOG_CHUNKS` is refused with the measured
+block time and the arithmetic, rather than quietly hammering your provider.
+
+One known gap: a Governor fork that changed the `ProposalCreated` parameter
+*types* would need its own event definition. Renaming parameters is fine, which
+is why one definition covers both OpenZeppelin and Compound Bravo.
 
 ## Guardrails
 
@@ -291,7 +325,8 @@ src/
   platforms/
     snapshot.ts       Hub queries, EIP-712 vote types, sequencer submission
     governor.ts       Governor ABI, calldata encoding, on-chain state reads
-    tally.ts          Tally API for on-chain proposal discovery
+    governorIndexer.ts  On-chain discovery from ProposalCreated logs
+    tally.ts          Legacy hosted indexer (Tally, now Cactus)
   tools/
     safeTools.ts      safe_*
     snapshotTools.ts  snapshot_*
@@ -316,10 +351,15 @@ message hash is in the result; once the other owners sign it in the Safe UI, cal
 signature: a minimum-balance requirement, or voting closed between the read and
 the submission. The sequencer's own message is passed through verbatim.
 
-**The watcher queues nothing** — `--plan` prints what each space returned. An
-empty result usually means the space id is wrong, or nothing is open right now.
-On-chain proposals also need `TALLY_API_KEY`, and only governors on
-`SAFE_CHAIN_ID` are queued.
+**The watcher queues nothing** — `--plan` prints what each space and governor
+returned. An empty result usually means the space id or governor address is
+wrong, or nothing is open right now. For on-chain proposals, check that
+`GOVERNOR_LOOKBACK` reaches back past the proposal's creation, and that the
+governor is on `SAFE_CHAIN_ID`.
+
+**"needs N eth_getLogs calls"** — the lookback is too long for this chain's
+block time. Shorten `GOVERNOR_LOOKBACK`, or raise
+`GOVERNOR_LOG_CHUNK_BLOCKS` if your RPC provider allows wider ranges.
 
 **The watcher dispatches but no vote appears** — the entry stays `pending` with
 `lastError` set in `data/schedule.json`, and the agent's output tail is on

@@ -31,19 +31,22 @@ export interface TallyOrganization {
 }
 
 /**
- * Tally is used for discovery and metadata only. Voting itself goes straight to
- * the Governor contract, so an unset TALLY_API_KEY degrades discovery rather
- * than blocking votes.
+ * Legacy hosted-indexer path. Tally shut down in March 2026 and the platform is
+ * now Cactus, run by ScopeLift, so this endpoint may be unavailable or may move.
+ * On-chain discovery in governorIndexer.ts is the supported route and needs no
+ * API at all; this is kept only for operators who still have a working key.
  */
 function requireApiKey(config: Config): string {
-  if (!config.TALLY_API_KEY) {
+  if (!config.indexerApiKey) {
     throw new Error(
-      "TALLY_API_KEY is not set, so Tally proposal discovery is unavailable. " +
-        "Get a free key at https://www.tally.xyz/user/api-keys, or vote directly " +
-        "with governor_vote using a proposal id you already have."
+      "No governance indexer API key is set, so hosted proposal discovery is " +
+        "unavailable. Tally shut down in March 2026 and is now Cactus, so this " +
+        "path may not work even with a key. Use governor_find_proposals instead, " +
+        "which reads ProposalCreated logs straight from the Governor contract and " +
+        "needs no API key."
     );
   }
-  return config.TALLY_API_KEY;
+  return config.indexerApiKey;
 }
 
 async function tallyQuery<T>(
@@ -51,7 +54,7 @@ async function tallyQuery<T>(
   query: string,
   variables: Record<string, unknown>
 ): Promise<T> {
-  const response = await fetch(config.TALLY_API_URL, {
+  const response = await fetch(config.indexerApiUrl, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -62,7 +65,9 @@ async function tallyQuery<T>(
 
   if (!response.ok) {
     throw new Error(
-      `Tally API returned ${response.status} ${response.statusText}: ${await response.text()}`
+      `The governance indexer at ${config.indexerApiUrl} returned ${response.status} ` +
+        `${response.statusText}: ${await response.text()}. Tally shut down in March ` +
+        "2026; use governor_find_proposals for on-chain discovery instead."
     );
   }
 

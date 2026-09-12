@@ -12,7 +12,7 @@ proposal's deadline approaches.
   safe-mpc-watch --once     run a single pass and exit (use from cron)
   safe-mpc-watch --plan     show what is queued and due, dispatching nothing
 
-Configure WATCH_SNAPSHOT_SPACES, WATCH_TALLY_SLUGS, VOTE_BEFORE_CLOSE and
+Configure WATCH_SNAPSHOT_SPACES, WATCH_GOVERNORS, VOTE_BEFORE_CLOSE and
 AGENT_COMMAND. See .env.example.
 `.trim();
 
@@ -28,10 +28,14 @@ async function main(): Promise<void> {
   const once = args.has("--once");
   const config = loadConfig();
 
-  if (config.WATCH_SNAPSHOT_SPACES.length === 0 && config.WATCH_TALLY_SLUGS.length === 0) {
+  if (
+    config.WATCH_SNAPSHOT_SPACES.length === 0 &&
+    config.WATCH_GOVERNORS.length === 0 &&
+    config.WATCH_TALLY_SLUGS.length === 0
+  ) {
     throw new Error(
       "Nothing to watch. Set WATCH_SNAPSHOT_SPACES (Snapshot space ids) and/or " +
-        "WATCH_TALLY_SLUGS (Tally organization slugs)."
+        "WATCH_GOVERNORS (Governor contract addresses on this chain)."
     );
   }
 
@@ -51,7 +55,10 @@ async function main(): Promise<void> {
   console.error(
     `safe-mpc-watch: Safe ${config.SAFE_ADDRESS} on ${getChainName(config.SAFE_CHAIN_ID)}\n` +
       `  spaces:   ${config.WATCH_SNAPSHOT_SPACES.join(", ") || "(none)"}\n` +
-      `  tally:    ${config.WATCH_TALLY_SLUGS.join(", ") || "(none)"}\n` +
+      `  governors: ${config.WATCH_GOVERNORS.join(", ") || "(none)"}\n` +
+      (config.WATCH_TALLY_SLUGS.length > 0
+        ? `  hosted:   ${config.WATCH_TALLY_SLUGS.join(", ")} (legacy, Tally shut down)\n`
+        : "") +
       `  vote at:  ${formatDuration(leadMs)} before a proposal closes\n` +
       `  polling:  every ${formatDuration(intervalMs)}${once ? " (single pass)" : ""}\n` +
       `  mode:     ${planOnly ? "plan only" : config.DRY_RUN ? "DRY_RUN" : "live"}`
