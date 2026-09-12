@@ -3,6 +3,7 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { assertAgentCanSign, getMessageClient, getSafeClient } from "../safe.js";
 import { assertSpaceAllowed, type Config } from "../config.js";
 import * as snapshot from "../platforms/snapshot.js";
+import { appendVote, type VoteOutcome } from "../voteLog.js";
 import { guard, isoTime, json, relativeTime } from "./shared.js";
 
 const APP_NAME = "safe-mpc";
@@ -22,6 +23,22 @@ const choiceSchema = z
       "an array for approval or ranked-choice, or an object of option->weight " +
       "for weighted or quadratic (e.g. {\"1\": 70, \"2\": 30})."
   );
+
+/** Raised when the Safe needs more owner signatures before the vote can go out. */
+class ThresholdNotMetError extends Error {
+  constructor(
+    readonly messageHash: string,
+    readonly confirmations: number,
+    readonly threshold: number
+  ) {
+    super(
+      `The Safe message is signed by ${confirmations} of ${threshold} required owners. ` +
+        `Ask the remaining owner(s) to sign message ${messageHash} in the Safe UI, ` +
+        "then call snapshot_submit_pending_vote to send the vote."
+    );
+    this.name = "ThresholdNotMetError";
+  }
+}
 
 /**
  * Waits for the Safe Transaction Service to assemble a signature that satisfies
@@ -48,11 +65,7 @@ async function awaitPreparedSignature(
       // Threshold not met yet: more owners must sign before Snapshot will
       // accept the vote. Stop polling and report that clearly.
       if (confirmations > 0 && confirmations < threshold) {
-        throw new Error(
-          `The Safe message is signed by ${confirmations} of ${threshold} required owners. ` +
-            `Ask the remaining owner(s) to sign message ${messageHash} in the Safe UI, ` +
-            "then call snapshot_submit_pending_vote to send the vote."
-        );
+        throw new ThresholdNotMetError(messageHash, confirmations, threshold);
       }
     }
 
@@ -273,7 +286,30 @@ export function registerSnapshotTools(server: McpServer, config: Config): void {
 
       const chosen = snapshot.describeChoice(proposal, typedData.message.choice);
 
+      const record = (
+        outcome: VoteOutcome,
+        extra: { receipt?: string | null; safeMessageHash?: string | null; error?: string | null }
+      ) =>
+        appendVote(config, {
+          platform: "snapshot",
+          outcome,
+          safeAddress: config.SAFE_ADDRESS,
+          chainId: config.SAFE_CHAIN_ID,
+          proposalId,
+          venue: space,
+          title: proposal.title,
+          choice: chosen,
+          reason,
+          votingPower: String(power.vp),
+          receipt: extra.receipt ?? null,
+          safeTxHash: null,
+          safeMessageHash: extra.safeMessageHash ?? null,
+          error: extra.error ?? null,
+        });
+
       if (config.DRY_RUN) {
+        await record("dry-run", {});
+
         return json(
           {
             dryRun: true,
@@ -301,16 +337,45 @@ export function registerSnapshotTools(server: McpServer, config: Config): void {
         );
       }
 
-      const { signature, confirmations, threshold } = await awaitPreparedSignature(
-        config,
-        messageHash
-      );
+      let signature: string;
+      let confirmations: number;
+      let threshold: number;
 
-      const receipt = await snapshot.submitVote(config, {
-        address: config.SAFE_ADDRESS,
-        signature,
-        typedData,
-      });
+      try {
+        ({ signature, confirmations, threshold } = await awaitPreparedSignature(
+          config,
+          messageHash
+        ));
+      } catch (error) {
+        // Record the attempt either way: a queued vote still needs following up,
+        // and a failure should be visible in the log rather than only in chat.
+        await record(
+          error instanceof ThresholdNotMetError ? "queued" : "failed",
+          {
+            safeMessageHash: messageHash,
+            error: error instanceof Error ? error.message : String(error),
+          }
+        );
+        throw error;
+      }
+
+      let receipt: { id: string; ipfs?: string };
+
+      try {
+        receipt = await snapshot.submitVote(config, {
+          address: config.SAFE_ADDRESS,
+          signature,
+          typedData,
+        });
+      } catch (error) {
+        await record("failed", {
+          safeMessageHash: messageHash,
+          error: error instanceof Error ? error.message : String(error),
+        });
+        throw error;
+      }
+
+      await record("submitted", { receipt: receipt.id, safeMessageHash: messageHash });
 
       return json(
         {
@@ -384,6 +449,23 @@ export function registerSnapshotTools(server: McpServer, config: Config): void {
         address: config.SAFE_ADDRESS,
         signature,
         typedData,
+      });
+
+      await appendVote(config, {
+        platform: "snapshot",
+        outcome: "submitted",
+        safeAddress: config.SAFE_ADDRESS,
+        chainId: config.SAFE_CHAIN_ID,
+        proposalId: String(typedData.message.proposal),
+        venue: space,
+        title: null,
+        choice: String(typedData.message.choice),
+        reason: String(typedData.message.reason ?? ""),
+        votingPower: null,
+        receipt: receipt.id,
+        safeTxHash: null,
+        safeMessageHash,
+        error: null,
       });
 
       return json(
