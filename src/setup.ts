@@ -98,7 +98,12 @@ async function check(): Promise<void> {
   console.log(`  RPC            ${resolveRpcUrl(config.SAFE_CHAIN_ID, config.SAFE_RPC_URL)}`);
   console.log(`  Agent signer   ${agent}`);
   console.log(`  Safe           ${config.SAFE_ADDRESS}`);
-  console.log(`  Safe API key   ${config.SAFE_API_KEY ? "set" : "NOT SET (Snapshot voting needs it)"}`);
+  const serviceKey = config.SAFE_API_KEY
+    ? "set"
+    : config.SAFE_TX_SERVICE_URL
+      ? "not set (covered by SAFE_TX_SERVICE_URL)"
+      : "NOT SET — every voting tool will fail, and the server will not start";
+  console.log(`  Safe API key   ${serviceKey}`);
   console.log(`  Dry run        ${config.DRY_RUN ? "on" : "OFF — votes are real"}\n`);
 
   const problems: string[] = [];
@@ -227,8 +232,11 @@ async function writeEnv(options: EnvOptions): Promise<void> {
     "# ALLOWED_SNAPSHOT_SPACES=",
     "# ALLOWED_GOVERNORS=",
     "",
-    "KNOWLEDGE_DIR=knowledge",
-    "VOTE_LOG_PATH=data/votes.jsonl",
+    "# Absolute, because an MCP client spawns the server from its own working",
+    "# directory and these would otherwise resolve somewhere unexpected.",
+    `KNOWLEDGE_DIR=${join(packageRoot(), "knowledge")}`,
+    `VOTE_LOG_PATH=${join(packageRoot(), "data", "votes.jsonl")}`,
+    `SCHEDULE_PATH=${join(packageRoot(), "data", "schedule.json")}`,
     "",
   ];
 
