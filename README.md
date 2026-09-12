@@ -167,6 +167,8 @@ npm run inspect
 
 Step-by-step guides for hosting the server beside a self-hosted agent:
 
+- [docs/running-the-server.md](docs/running-the-server.md) — the combined
+  quick path for both OpenClaw and Grok, with links into the detail below.
 - [docs/openclaw.md](docs/openclaw.md) — OpenClaw, over stdio on one box.
 - [docs/grokbot.md](docs/grokbot.md) — Grok Build over stdio, and why Grok Bot
   needs a hosted endpoint this repo does not ship yet.
