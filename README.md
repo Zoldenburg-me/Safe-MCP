@@ -165,6 +165,12 @@ To poke at the server directly:
 npm run inspect
 ```
 
+Step-by-step guides for hosting the server beside a self-hosted agent:
+
+- [docs/openclaw.md](docs/openclaw.md) — OpenClaw, over stdio on one box.
+- [docs/grokbot.md](docs/grokbot.md) — Grok Build over stdio, and why Grok Bot
+  needs a hosted endpoint this repo does not ship yet.
+
 ### Which account needs ETH
 
 The Safe does not pay gas for its own votes. The account that calls
