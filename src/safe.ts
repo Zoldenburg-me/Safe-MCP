@@ -83,6 +83,30 @@ export async function assertAgentCanSign(config: Config): Promise<void> {
   }
 }
 
+/**
+ * The agent EOA submits execTransaction, so it is the account that pays gas for
+ * an on-chain vote, not the Safe. A Safe holding ETH does not help here. Fail
+ * before signing, with the cause named, rather than on an opaque RPC rejection.
+ */
+export async function assertAgentCanPayGas(config: Config): Promise<void> {
+  const agent = getAgentAddress(config);
+
+  const balance = await getPublicClient(config)
+    .getBalance({ address: agent as `0x${string}` })
+    .catch(() => null);
+
+  if (balance === null) return; // Balance unreadable; let the send attempt decide.
+
+  if (balance === 0n) {
+    throw new Error(
+      `The agent signer ${agent} holds no ETH and is the account that pays gas for ` +
+        "this transaction, so it would be rejected. Send ETH to the agent signer " +
+        `address, not to the Safe ${config.SAFE_ADDRESS}: the Safe's own balance does ` +
+        "not pay for execTransaction. Snapshot voting is gasless and needs none of this."
+    );
+  }
+}
+
 /** Test seam: drop the memoised clients. */
 export function resetSafeClients(): void {
   safeClientPromise = undefined;

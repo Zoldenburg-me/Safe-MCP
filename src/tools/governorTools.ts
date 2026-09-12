@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { getAddress, type Address } from "viem";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { assertAgentCanSign, getSafeClient } from "../safe.js";
+import { assertAgentCanPayGas, assertAgentCanSign, getSafeClient } from "../safe.js";
 import { assertGovernorAllowed, type Config } from "../config.js";
 import { explorerTxUrl } from "../chains.js";
 import * as governor from "../platforms/governor.js";
@@ -353,6 +353,7 @@ export function registerGovernorTools(server: McpServer, config: Config): void {
       }
 
       await assertAgentCanSign(config);
+      await assertAgentCanPayGas(config);
 
       const client = await getSafeClient(config);
 
