@@ -44,6 +44,7 @@ beforeEach(async () => {
     SCHEDULE_PATH: join(dir, "schedule.json"),
     // Empty watch lists keep discovery entirely offline.
     WATCH_SNAPSHOT_SPACES: [],
+    WATCH_GOVERNORS: [],
     WATCH_TALLY_SLUGS: [],
     VOTE_BEFORE_CLOSE: "6h",
     POLL_INTERVAL: "1h",

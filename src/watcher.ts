@@ -15,6 +15,7 @@ import {
 import { hasVotedOn } from "./voteLog.js";
 import * as snapshot from "./platforms/snapshot.js";
 import * as tally from "./platforms/tally.js";
+import * as indexer from "./platforms/governorIndexer.js";
 import type { Config } from "./config.js";
 
 /** Closed proposals stay in the schedule this long, for visibility. */
@@ -152,10 +153,57 @@ export async function discoverSnapshot(config: Config): Promise<DiscoveredPropos
 }
 
 /**
- * Discovers open on-chain proposals through Tally, keeping only governors on
- * the Safe's own chain since the Safe cannot vote on any other.
+ * Discovers open on-chain proposals by reading ProposalCreated logs from each
+ * watched Governor. This is the supported path: it needs no third-party
+ * indexer, which matters because Tally shut down in March 2026.
  */
-export async function discoverGovernor(config: Config): Promise<DiscoveredProposal[]> {
+export async function discoverGovernorOnChain(
+  config: Config
+): Promise<DiscoveredProposal[]> {
+  const found: DiscoveredProposal[] = [];
+
+  for (const governor of config.WATCH_GOVERNORS) {
+    try {
+      const proposals = await indexer.findProposals(config, {
+        governor: governor as `0x${string}`,
+        states: ["Pending", "Active"],
+      });
+
+      for (const proposal of proposals) {
+        found.push({
+          platform: "governor",
+          proposalId: proposal.proposalId,
+          venue: proposal.governor,
+          title: proposal.title,
+          endsAt: proposal.endsAt,
+        });
+      }
+
+      log(
+        `governor ${governor}: ${proposals.length} open proposal(s)` +
+          (proposals.some((p) => p.endsAtIsEstimate)
+            ? " (deadlines estimated from block time)"
+            : "")
+      );
+    } catch (error) {
+      log(
+        `governor ${governor}: discovery failed: ${
+          error instanceof Error ? error.message : String(error)
+        }`
+      );
+    }
+  }
+
+  return found;
+}
+
+/**
+ * Legacy discovery through the Tally-compatible hosted API. Kept for operators
+ * with a working key; WATCH_GOVERNORS is the supported route.
+ */
+export async function discoverGovernorHosted(
+  config: Config
+): Promise<DiscoveredProposal[]> {
   const found: DiscoveredProposal[] = [];
 
   for (const slug of config.WATCH_TALLY_SLUGS) {
@@ -279,7 +327,8 @@ export async function tick(
 
   const discovered = [
     ...(await discoverSnapshot(config)),
-    ...(await discoverGovernor(config)),
+    ...(await discoverGovernorOnChain(config)),
+    ...(await discoverGovernorHosted(config)),
   ];
 
   let schedule = pruneSchedule(await loadSchedule(config), RETAIN_CLOSED, now);

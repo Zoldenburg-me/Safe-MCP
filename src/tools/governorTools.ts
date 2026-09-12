@@ -6,6 +6,7 @@ import { assertGovernorAllowed, type Config } from "../config.js";
 import { explorerTxUrl } from "../chains.js";
 import * as governor from "../platforms/governor.js";
 import * as tally from "../platforms/tally.js";
+import * as indexer from "../platforms/governorIndexer.js";
 import { appendVote, type VoteOutcome } from "../voteLog.js";
 import { guard, isoTime, json, relativeTime } from "./shared.js";
 
@@ -15,13 +16,85 @@ const addressSchema = z
 
 export function registerGovernorTools(server: McpServer, config: Config): void {
   server.registerTool(
+    "governor_find_proposals",
+    {
+      title: "Find on-chain Governor proposals (no API key)",
+      description:
+        "Discovers proposals by reading ProposalCreated logs straight from a " +
+        "Governor contract, then filtering by the contract's live state. Returns " +
+        "the full proposal description, so no third-party indexer is involved. " +
+        "This is the supported way to find on-chain proposals: Tally shut down in " +
+        "March 2026. Works with OpenZeppelin Governor and Compound Bravo.",
+      inputSchema: {
+        governor: addressSchema.describe("Governor contract address"),
+        states: z
+          .array(
+            z.enum([
+              "Pending",
+              "Active",
+              "Canceled",
+              "Defeated",
+              "Succeeded",
+              "Queued",
+              "Expired",
+              "Executed",
+            ])
+          )
+          .default(["Pending", "Active"])
+          .describe("Which proposal states to return"),
+        lookback: z
+          .string()
+          .optional()
+          .describe(
+            'How far back to scan for proposals, e.g. "30d" or "7d". Defaults to ' +
+              "GOVERNOR_LOOKBACK. Longer scans cost more RPC calls."
+          ),
+      },
+      annotations: { readOnlyHint: true, openWorldHint: true },
+    },
+    guard(async ({ governor: governorAddress, states, lookback }) => {
+      const proposals = await indexer.findProposals(config, {
+        governor: getAddress(governorAddress) as Address,
+        states,
+        ...(lookback ? { lookback } : {}),
+      });
+
+      const rows = proposals.map((proposal) => ({
+        proposalId: proposal.proposalId,
+        title: proposal.title,
+        state: proposal.state,
+        proposer: proposal.proposer,
+        voteEnd: proposal.voteEnd,
+        endsAt: proposal.endsAt.toISOString(),
+        endsAtIsEstimate: proposal.endsAtIsEstimate,
+        closesIn: relativeTime(Math.floor(proposal.endsAt.getTime() / 1000)),
+        description: proposal.description,
+      }));
+
+      const estimated = rows.some((row) => row.endsAtIsEstimate);
+
+      return json(
+        { governor: governorAddress, count: rows.length, proposals: rows },
+        (rows.length === 0
+          ? "No proposals in those states within the lookback window."
+          : `${rows.length} proposal(s).`) +
+          (estimated
+            ? " This Governor counts time in blocks, so each deadline is estimated from" +
+              " the chain's recent average block time and will drift."
+            : "")
+      );
+    })
+  );
+
+  server.registerTool(
     "governor_list_proposals",
     {
-      title: "List on-chain Governor proposals",
+      title: "List Governor proposals via a hosted indexer (legacy)",
       description:
-        "Lists on-chain proposals for a DAO via the Tally API, newest first. " +
-        'Identify the DAO by its Tally slug (e.g. "uniswap"), its Tally organization ' +
-        "id, or a specific governor id. Requires TALLY_API_KEY.",
+        "Legacy path: lists proposals through the Tally-compatible hosted API. " +
+        "Tally shut down in March 2026 and is now Cactus, so this may fail even " +
+        "with a key. Prefer governor_find_proposals, which reads the Governor " +
+        "contract directly and needs no API key.",
       inputSchema: {
         organizationSlug: z
           .string()
@@ -70,11 +143,12 @@ export function registerGovernorTools(server: McpServer, config: Config): void {
   server.registerTool(
     "governor_get_proposal",
     {
-      title: "Read an on-chain Governor proposal",
+      title: "Read a Governor proposal via a hosted indexer (legacy)",
       description:
-        "Fetches a proposal's title, full description and vote tallies from Tally. " +
-        "Requires TALLY_API_KEY. For the live on-chain state of a proposal, use " +
-        "governor_proposal_state instead, which needs no API key.",
+        "Legacy path: fetches a proposal's title, description and tallies from the " +
+        "Tally-compatible hosted API, which shut down in March 2026. Prefer " +
+        "governor_find_proposals for the description and governor_proposal_state " +
+        "for live on-chain state; neither needs an API key.",
       inputSchema: {
         tallyId: z.string().optional().describe("Tally's internal proposal id"),
         onchainId: z.string().optional().describe("The Governor contract's proposal id"),

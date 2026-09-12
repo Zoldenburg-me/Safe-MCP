@@ -41,6 +41,10 @@ const envSchema = z.object({
   SNAPSHOT_HUB_URL: z.string().url().default("https://hub.snapshot.org"),
   SNAPSHOT_SEQUENCER_URL: z.string().url().default("https://seq.snapshot.org"),
 
+  // Tally shut down in March 2026 and the platform is now Cactus, run by
+  // ScopeLift. These are optional: on-chain discovery needs no API at all.
+  CACTUS_API_URL: z.string().url().optional(),
+  CACTUS_API_KEY: z.string().min(1).optional(),
   TALLY_API_URL: z.string().url().default("https://api.tally.xyz/query"),
   TALLY_API_KEY: z.string().min(1).optional(),
 
@@ -54,16 +58,25 @@ const envSchema = z.object({
   VOTE_LOG_PATH: z.string().default("data/votes.jsonl"),
   SCHEDULE_PATH: z.string().default("data/schedule.json"),
   WATCH_SNAPSHOT_SPACES: csv,
+  WATCH_GOVERNORS: csv,
   WATCH_TALLY_SLUGS: csv,
   POLL_INTERVAL: z.string().default("1h"),
   VOTE_BEFORE_CLOSE: z.string().default("6h"),
   AGENT_COMMAND: z.string().optional(),
   AGENT_TIMEOUT: z.string().default("10m"),
+
+  // On-chain Governor proposal discovery
+  GOVERNOR_LOOKBACK: z.string().default("30d"),
+  GOVERNOR_LOG_CHUNK_BLOCKS: z.coerce.number().int().positive().default(10_000),
+  GOVERNOR_MAX_LOG_CHUNKS: z.coerce.number().int().positive().default(200),
 });
 
 export type Config = z.infer<typeof envSchema> & {
   /** Lowercased Safe address, for comparisons. */
   safeAddressLower: string;
+  /** Resolved governance-indexer endpoint: CACTUS_* wins over legacy TALLY_*. */
+  indexerApiUrl: string;
+  indexerApiKey: string | undefined;
 };
 
 let cached: Config | undefined;
@@ -92,6 +105,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   cached = {
     ...parsed.data,
     safeAddressLower: parsed.data.SAFE_ADDRESS.toLowerCase(),
+    indexerApiUrl: parsed.data.CACTUS_API_URL ?? parsed.data.TALLY_API_URL,
+    indexerApiKey: parsed.data.CACTUS_API_KEY ?? parsed.data.TALLY_API_KEY,
   };
 
   return cached;
