@@ -239,12 +239,20 @@ dispatch is refused outright if either could alter how the command parses.
 ### On-chain discovery and its limits
 
 `governor_find_proposals` and the scheduler's Governor path both scan
-`ProposalCreated` logs over `GOVERNOR_LOOKBACK`, then filter by the contract's
-live `state()`. Two consequences are worth knowing.
+`ProposalCreated` logs, then filter by the contract's live `state()`.
 
-**A proposal created before the lookback window is invisible**, even if it is
-still open. Keep `GOVERNOR_LOOKBACK` comfortably longer than the longest voting
-period you care about.
+**The scan window comes from the Governor, not from a guess.** A proposal can
+only be open if it was created within `votingDelay + votingPeriod` of now, so
+that is exactly how far back the scan reaches, plus
+`GOVERNOR_LOOKBACK_MARGIN`. A DAO with a one-day delay and a three-day voting
+period is scanned six days back, not a fixed month. Every result reports the
+window it used and where that came from. `GOVERNOR_LOOKBACK` is only the
+fallback for a Governor fork that does not expose those two methods, and the
+`lookback` argument overrides both.
+
+This does mean a proposal created before that window is invisible, which
+matters only if the DAO shortened its voting period very recently. Widen
+`GOVERNOR_LOOKBACK_MARGIN` or pass an explicit `lookback` if so.
 
 **Deadlines are estimated on a Governor that counts in blocks.** OpenZeppelin
 Governor v5 and later can report time in seconds via ERC-6372, and those
@@ -255,9 +263,12 @@ with `endsAtIsEstimate`, and the estimate drifts as block times change. Leave
 enough room in `VOTE_BEFORE_CLOSE` to absorb that drift.
 
 Scans are chunked because most RPC providers cap the block span of a single
-`eth_getLogs` call. On a fast chain a long lookback becomes a lot of calls, so
-a scan needing more than `GOVERNOR_MAX_LOG_CHUNKS` is refused with the measured
-block time and the arithmetic, rather than quietly hammering your provider.
+`eth_getLogs` call. Deriving the window from the contract keeps that cost
+proportionate: on a chain producing a block every quarter second, a three-day
+voting period is a far smaller scan than a blanket month would be. A scan
+needing more than `GOVERNOR_MAX_LOG_CHUNKS` calls is still refused, reporting
+the measured block time and where the window came from, rather than quietly
+hammering your provider.
 
 One known gap: a Governor fork that changed the `ProposalCreated` parameter
 *types* would need its own event definition. Renaming parameters is fine, which
@@ -353,13 +364,15 @@ the submission. The sequencer's own message is passed through verbatim.
 
 **The watcher queues nothing** — `--plan` prints what each space and governor
 returned. An empty result usually means the space id or governor address is
-wrong, or nothing is open right now. For on-chain proposals, check that
-`GOVERNOR_LOOKBACK` reaches back past the proposal's creation, and that the
-governor is on `SAFE_CHAIN_ID`.
+wrong, or nothing is open right now. For on-chain proposals, the log line
+reports the scan window that was used; check that it reaches back past the
+proposal's creation, and that the governor is on `SAFE_CHAIN_ID`.
 
-**"needs N eth_getLogs calls"** — the lookback is too long for this chain's
-block time. Shorten `GOVERNOR_LOOKBACK`, or raise
-`GOVERNOR_LOG_CHUNK_BLOCKS` if your RPC provider allows wider ranges.
+**"needs N eth_getLogs calls"** — the window is too wide for this chain's block
+time. The error names where the window came from. If it was derived from the
+Governor, the DAO genuinely has a long voting period, so raise
+`GOVERNOR_LOG_CHUNK_BLOCKS` if your provider allows wider ranges. If it fell
+back to `GOVERNOR_LOOKBACK`, shorten that instead.
 
 **The watcher dispatches but no vote appears** — the entry stays `pending` with
 `lastError` set in `data/schedule.json`, and the agent's output tail is on

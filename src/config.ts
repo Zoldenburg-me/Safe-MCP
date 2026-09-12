@@ -66,7 +66,10 @@ const envSchema = z.object({
   AGENT_TIMEOUT: z.string().default("10m"),
 
   // On-chain Governor proposal discovery
+  // Only used when a Governor does not expose votingDelay/votingPeriod. The
+  // scan window is normally derived from the contract itself.
   GOVERNOR_LOOKBACK: z.string().default("30d"),
+  GOVERNOR_LOOKBACK_MARGIN: z.string().default("2d"),
   GOVERNOR_LOG_CHUNK_BLOCKS: z.coerce.number().int().positive().default(10_000),
   GOVERNOR_MAX_LOG_CHUNKS: z.coerce.number().int().positive().default(200),
 });

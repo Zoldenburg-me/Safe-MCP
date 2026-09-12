@@ -82,6 +82,20 @@ export const GOVERNOR_ABI = [
   },
   {
     type: "function",
+    name: "votingDelay",
+    stateMutability: "view",
+    inputs: [],
+    outputs: [{ name: "", type: "uint256" }],
+  },
+  {
+    type: "function",
+    name: "votingPeriod",
+    stateMutability: "view",
+    inputs: [],
+    outputs: [{ name: "", type: "uint256" }],
+  },
+  {
+    type: "function",
     name: "quorum",
     stateMutability: "view",
     inputs: [{ name: "timepoint", type: "uint256" }],
