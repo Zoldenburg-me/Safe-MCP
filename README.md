@@ -72,6 +72,29 @@ The Safe's **threshold** decides how much the agent can do alone:
 A 1-of-N Safe gives the agent full autonomy. Raise the threshold to put a human
 in the loop without changing anything here.
 
+### Which account needs ETH
+
+The Safe does not pay gas for its own votes. The account that calls
+`execTransaction` pays, and that is the agent's EOA. Funding the Safe instead is
+the common mistake and does nothing for voting.
+
+| | Needs ETH | Why |
+| --- | --- | --- |
+| Snapshot votes | Nothing | Signing is off-chain and verification is an `eth_call`. Entirely gasless. |
+| Governor votes | The agent EOA | It submits `execTransaction` and pays the gas. |
+| The Safe itself | No | Only the governance token, or a delegation, for voting power. |
+
+So a Safe voting only on Snapshot needs no ETH anywhere. For on-chain voting,
+send a small amount of ETH to the agent EOA and top it up as it drains.
+
+`safe_info` reports both balances and says plainly whether on-chain voting will
+work. `governor_vote` refuses before signing if the agent has no ETH, naming the
+cause rather than surfacing an opaque RPC rejection.
+
+Safe supports refunding the executor out of the Safe's own balance, via the
+`gasPrice`, `gasToken` and `refundReceiver` transaction fields. Safe-MPC leaves
+those at zero, so no refund happens and the accounting stays simple.
+
 ### 3. Configure
 
 ```bash
@@ -349,6 +372,10 @@ src/
 
 **"is not an owner of Safe"** — the address in `SAFE_AGENT_PRIVATE_KEY` has not
 been added as a Safe owner. `safe_info` prints the current owner list.
+
+**"holds no ETH"** — the agent EOA, not the Safe, pays gas for on-chain votes.
+Send ETH to the address `safe_info` reports as `agentSigner`. Snapshot voting is
+unaffected and needs no ETH at all.
 
 **"no voting power"** — the Safe did not hold or was not delegated the
 governance token at the proposal's snapshot block. Delegation set up after that

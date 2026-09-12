@@ -12,9 +12,10 @@ export function registerSafeTools(server: McpServer, config: Config): void {
     {
       title: "Safe wallet info",
       description:
-        "Reports the configured Safe: chain, owners, threshold, nonce, native balance, " +
-        "and whether the agent's signer key is an owner that can execute alone. " +
-        "Call this first to confirm the agent can actually vote.",
+        "Reports the configured Safe and the agent's readiness to vote: chain, owners, " +
+        "threshold, nonce, both ETH balances, and whether the agent's signer key is an " +
+        "owner that can execute alone. The agent's own balance is what pays gas for " +
+        "on-chain votes; Snapshot votes are gasless and need none. Call this first.",
       inputSchema: {},
       annotations: { readOnlyHint: true, openWorldHint: true },
     },
@@ -29,11 +30,18 @@ export function registerSafeTools(server: McpServer, config: Config): void {
         client.getNonce().catch(() => 0),
       ]);
 
-      const balance = await getPublicClient(config)
-        .getBalance({ address: config.SAFE_ADDRESS as `0x${string}` })
-        .catch(() => null);
+      const client_ = getPublicClient(config);
+
+      // The Safe's balance funds proposal payloads; the agent's balance pays the
+      // gas for execTransaction. They are separate concerns and both are worth
+      // surfacing, because the agent's is the one that stops votes landing.
+      const [safeBalance, agentBalance] = await Promise.all([
+        client_.getBalance({ address: config.SAFE_ADDRESS as `0x${string}` }).catch(() => null),
+        client_.getBalance({ address: agent as `0x${string}` }).catch(() => null),
+      ]);
 
       const isOwner = owners.some((o) => o.toLowerCase() === agent.toLowerCase());
+      const agentIsFunded = agentBalance !== null && agentBalance > 0n;
 
       return json(
         {
@@ -44,10 +52,13 @@ export function registerSafeTools(server: McpServer, config: Config): void {
           owners,
           threshold,
           nonce,
-          nativeBalance: balance === null ? null : formatEther(balance),
+          safeBalance: safeBalance === null ? null : formatEther(safeBalance),
           agentSigner: agent,
+          agentBalance: agentBalance === null ? null : formatEther(agentBalance),
           agentIsOwner: isOwner,
           agentCanExecuteAlone: isOwner && threshold === 1,
+          canVoteOnSnapshot: isOwner,
+          canVoteOnChain: isOwner && agentIsFunded,
           dryRun: config.DRY_RUN,
           allowedSnapshotSpaces:
             config.ALLOWED_SNAPSHOT_SPACES.length > 0
@@ -56,11 +67,18 @@ export function registerSafeTools(server: McpServer, config: Config): void {
           allowedGovernors:
             config.ALLOWED_GOVERNORS.length > 0 ? config.ALLOWED_GOVERNORS : "all",
         },
-        isOwner
-          ? threshold === 1
-            ? "The agent signer is an owner and the threshold is 1, so it can cast votes on its own."
-            : `The agent signer is an owner, but the threshold is ${threshold}. Votes will be proposed and need ${threshold - 1} more confirmation(s).`
-          : `WARNING: the agent signer ${agent} is not an owner of this Safe and cannot vote.`
+        [
+          isOwner
+            ? threshold === 1
+              ? "The agent signer is an owner and the threshold is 1, so it can cast votes on its own."
+              : `The agent signer is an owner, but the threshold is ${threshold}. Votes will be proposed and need ${threshold - 1} more confirmation(s).`
+            : `WARNING: the agent signer ${agent} is not an owner of this Safe and cannot vote.`,
+          agentIsFunded
+            ? "Snapshot voting is gasless. On-chain Governor voting is funded by the agent signer, which holds ETH."
+            : "Snapshot voting is gasless and works as is. On-chain Governor voting will fail: " +
+              `the agent signer ${agent} holds no ETH, and it is the account that pays gas ` +
+              "for execTransaction. Send ETH to the agent signer, not to the Safe.",
+        ].join(" ")
       );
     })
   );
