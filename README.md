@@ -106,9 +106,16 @@ in the loop without changing anything here.
 
 Setup writes the essentials. `.env.example` documents every other setting, and
 `cp .env.example .env` is the manual route if you would rather not use setup at
-all. Snapshot voting needs a `SAFE_API_KEY` from
-[developer.safe.global](https://developer.safe.global), because the Safe message
-service assembles the EIP-1271 signature.
+all.
+
+**You need a `SAFE_API_KEY` from
+[developer.safe.global](https://developer.safe.global).** The key is free. The
+Safe SDK builds its Transaction Service client before any request is made, and
+that constructor refuses a missing key, so every tool that touches the Safe
+needs one. That includes `governor_vote` from a threshold-1 Safe, which executes
+straight over RPC and never calls the service. Read-only discovery works without
+a key, but voting does not, so the server refuses to start without either
+`SAFE_API_KEY` or a self-hosted `SAFE_TX_SERVICE_URL`.
 
 **Setup leaves `DRY_RUN=true`.** Every vote tool returns the exact payload it
 would have submitted and signs nothing. Turn it off once you have watched a dry
@@ -158,6 +165,12 @@ To poke at the server directly:
 npm run inspect
 ```
 
+Step-by-step guides for hosting the server beside a self-hosted agent:
+
+- [docs/openclaw.md](docs/openclaw.md) — OpenClaw, over stdio on one box.
+- [docs/grokbot.md](docs/grokbot.md) — Grok Build over stdio, and why Grok Bot
+  needs a hosted endpoint this repo does not ship yet.
+
 ### Which account needs ETH
 
 The Safe does not pay gas for its own votes. The account that calls
@@ -185,21 +198,25 @@ those at zero, so no refund happens and the accounting stays simple.
 
 | Tool | Reads or writes | What it does |
 | --- | --- | --- |
-| `safe_info` | read | Chain, owners, threshold, nonce, balance, and whether the agent can vote alone. |
-| `safe_pending_transactions` | read | Transactions queued on the Safe. |
-| `safe_confirm_transaction` | write | Adds the agent's signature to a queued transaction, executing it if that meets the threshold. |
+| `safe_info` | read | Chain, owners, threshold, nonce, balance, and whether the agent can vote alone. Needs the API key. |
+| `safe_pending_transactions` | read | Transactions queued on the Safe. Needs the API key. |
+| `safe_confirm_transaction` | write | Adds the agent's signature to a queued transaction, executing it if that meets the threshold. Needs the API key. |
 | `snapshot_list_proposals` | read | Proposals in a space, open ones by default. |
 | `snapshot_get_proposal` | read | Full body, indexed choices, scores, the Safe's voting power, and any vote it already cast. |
 | `snapshot_voting_power` | read | The Safe's voting power on one proposal, by strategy. |
-| `snapshot_vote` | write | Casts an off-chain Snapshot vote as the Safe. |
-| `snapshot_submit_pending_vote` | write | Submits a vote whose Safe message needed more signatures. |
+| `snapshot_vote` | write | Casts an off-chain Snapshot vote as the Safe. Needs the API key. |
+| `snapshot_submit_pending_vote` | write | Submits a vote whose Safe message needed more signatures. Needs the API key. |
 | `governor_find_proposals` | read | On-chain proposals, read from `ProposalCreated` logs. No API key. |
 | `governor_list_proposals` | read | Legacy: proposals via the hosted Tally-compatible API. |
 | `governor_get_proposal` | read | Legacy: title, description and tallies via the hosted API. |
 | `governor_proposal_state` | read | Live Governor state, read straight from the contract. No API key needed. |
-| `governor_vote` | write | Casts `castVoteWithReason` on-chain from the Safe. |
+| `governor_vote` | write | Casts `castVoteWithReason` on-chain from the Safe. Needs the API key, even at threshold 1. |
 | `vote_log` | read | Every vote this Safe has cast, with the choice and reason, so decisions stay consistent with precedent. |
 | `vote_schedule` | read | Proposals the scheduler has queued, and which are due now. |
+
+Tools marked "Needs the API key" build a Safe client and fail without
+`SAFE_API_KEY` or `SAFE_TX_SERVICE_URL`. The rest are plain RPC or Snapshot
+hub reads and work with neither.
 
 Three prompts wrap the tools into a reviewed workflow:
 `vote_on_snapshot_proposal`, `vote_on_governor_proposal`, and
@@ -399,6 +416,11 @@ src/
 ```
 
 ## Troubleshooting
+
+**"SAFE_API_KEY is not set"** at startup — the Safe SDK needs a Transaction
+Service key to construct its client, even for paths that never call the service.
+Get one free at [developer.safe.global](https://developer.safe.global), or set
+`SAFE_TX_SERVICE_URL` if you run your own service.
 
 **"is not an owner of Safe"** — the address in `SAFE_AGENT_PRIVATE_KEY` has not
 been added as a Safe owner. `safe_info` prints the current owner list.
