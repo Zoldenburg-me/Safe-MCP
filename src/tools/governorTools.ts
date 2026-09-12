@@ -6,6 +6,7 @@ import { assertGovernorAllowed, type Config } from "../config.js";
 import { explorerTxUrl } from "../chains.js";
 import * as governor from "../platforms/governor.js";
 import * as tally from "../platforms/tally.js";
+import { appendVote, type VoteOutcome } from "../voteLog.js";
 import { guard, isoTime, json, relativeTime } from "./shared.js";
 
 const addressSchema = z
@@ -227,7 +228,34 @@ export function registerGovernorTools(server: McpServer, config: Config): void {
 
       const data = governor.encodeCastVote({ proposalId, support, reason });
 
+      const record = (
+        outcome: VoteOutcome,
+        extra: {
+          receipt?: string | null;
+          safeTxHash?: string | null;
+          error?: string | null;
+        }
+      ) =>
+        appendVote(config, {
+          platform: "governor",
+          outcome,
+          safeAddress: config.SAFE_ADDRESS,
+          chainId: config.SAFE_CHAIN_ID,
+          proposalId,
+          venue: governorChecksum,
+          title: null,
+          choice: support,
+          reason,
+          votingPower: preflight?.votingPower ?? null,
+          receipt: extra.receipt ?? null,
+          safeTxHash: extra.safeTxHash ?? null,
+          safeMessageHash: null,
+          error: extra.error ?? null,
+        });
+
       if (config.DRY_RUN) {
+        await record("dry-run", {});
+
         return json(
           {
             dryRun: true,
@@ -246,13 +274,28 @@ export function registerGovernorTools(server: McpServer, config: Config): void {
       await assertAgentCanSign(config);
 
       const client = await getSafeClient(config);
-      const result = await client.send({
-        transactions: [{ to: governorChecksum, value: "0", data }],
-      });
+
+      let result: Awaited<ReturnType<typeof client.send>>;
+
+      try {
+        result = await client.send({
+          transactions: [{ to: governorChecksum, value: "0", data }],
+        });
+      } catch (error) {
+        await record("failed", {
+          error: error instanceof Error ? error.message : String(error),
+        });
+        throw error;
+      }
 
       const ethereumTxHash = result.transactions?.ethereumTxHash;
       const safeTxHash = result.transactions?.safeTxHash;
       const executed = Boolean(ethereumTxHash);
+
+      await record(executed ? "submitted" : "queued", {
+        receipt: ethereumTxHash ?? null,
+        safeTxHash: safeTxHash ?? null,
+      });
 
       return json(
         {

@@ -9,6 +9,13 @@ const privateKey = z
   .regex(/^0x[a-fA-F0-9]{64}$/, "must be a 0x-prefixed 32-byte private key");
 
 /** Comma- or space-separated list -> trimmed, de-duplicated, lowercased array. */
+const csv = z
+  .string()
+  .optional()
+  .transform((raw) =>
+    raw ? [...new Set(raw.split(/[,\s]+/).map((v) => v.trim()).filter(Boolean))] : []
+  );
+
 const csvLower = z
   .string()
   .optional()
@@ -42,6 +49,16 @@ const envSchema = z.object({
 
   DRY_RUN: bool,
   KNOWLEDGE_DIR: z.string().default("knowledge"),
+
+  // Vote log and scheduler
+  VOTE_LOG_PATH: z.string().default("data/votes.jsonl"),
+  SCHEDULE_PATH: z.string().default("data/schedule.json"),
+  WATCH_SNAPSHOT_SPACES: csv,
+  WATCH_TALLY_SLUGS: csv,
+  POLL_INTERVAL: z.string().default("1h"),
+  VOTE_BEFORE_CLOSE: z.string().default("6h"),
+  AGENT_COMMAND: z.string().optional(),
+  AGENT_TIMEOUT: z.string().default("10m"),
 });
 
 export type Config = z.infer<typeof envSchema> & {

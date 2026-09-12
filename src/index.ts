@@ -7,6 +7,7 @@ import { getChainName } from "./chains.js";
 import { registerSafeTools } from "./tools/safeTools.js";
 import { registerSnapshotTools } from "./tools/snapshotTools.js";
 import { registerGovernorTools } from "./tools/governorTools.js";
+import { registerLogTools } from "./tools/logTools.js";
 import { registerPolicyResources, registerPrompts } from "./prompts.js";
 
 const INSTRUCTIONS = `
@@ -26,7 +27,12 @@ cast the vote: the transaction or message is queued for the other owners.
 
 Always read a proposal in full before voting, confirm the Safe holds voting
 power, and record a substantive reason with the vote. If the operator has
-configured voting-policy resources, read them and vote to that policy.
+configured voting-policy resources, read them and vote to that policy. Check
+vote_log for how this Safe voted before, so decisions stay consistent.
+
+Every vote attempt is appended to a local vote log. vote_schedule shows
+proposals the safe-mpc-watch scheduler has queued for a decision, if it is
+running.
 `.trim();
 
 async function main(): Promise<void> {
@@ -40,6 +46,7 @@ async function main(): Promise<void> {
   registerSafeTools(server, config);
   registerSnapshotTools(server, config);
   registerGovernorTools(server, config);
+  registerLogTools(server, config);
   registerPolicyResources(server, config);
   registerPrompts(server, config);
 
