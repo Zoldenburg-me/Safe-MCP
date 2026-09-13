@@ -58,6 +58,40 @@ export function getAgentAddress(config: Config): string {
   return privateKeyToAccount(config.SAFE_AGENT_PRIVATE_KEY as `0x${string}`).address;
 }
 
+/** Tools that build a Safe client, and so cannot run without the service key. */
+const SAFE_CLIENT_TOOLS = [
+  "safe_info",
+  "safe_pending_transactions",
+  "safe_confirm_transaction",
+  "snapshot_vote",
+  "snapshot_submit_pending_vote",
+  "governor_vote",
+].join(", ");
+
+/**
+ * Fails at startup when the Safe service is unreachable by configuration.
+ *
+ * The SDK builds its Transaction Service client eagerly inside
+ * createSafeClient, and that client's constructor rejects a missing key before
+ * any request is made. Without this check the server starts cleanly and then
+ * fails on the first Safe tool with an error naming the SDK rather than the
+ * setting at fault — including on paths that never call the service, such as a
+ * Governor vote from a threshold-1 Safe, which executes straight over RPC.
+ *
+ * A self-hosted SAFE_TX_SERVICE_URL satisfies the SDK without a key.
+ */
+export function assertSafeServiceConfigured(config: Config): void {
+  if (config.SAFE_API_KEY || config.SAFE_TX_SERVICE_URL) return;
+
+  throw new Error(
+    "SAFE_API_KEY is not set, and the Safe SDK requires it to build its " +
+      "client.\n\n" +
+      `These tools would fail on first use: ${SAFE_CLIENT_TOOLS}.\n\n` +
+      "Get a free key at https://developer.safe.global and set SAFE_API_KEY, " +
+      "or point SAFE_TX_SERVICE_URL at a self-hosted Transaction Service."
+  );
+}
+
 /**
  * Fails loudly when the agent key cannot actually act for the Safe, so a vote
  * attempt reports "not an owner" rather than an opaque SDK error.
