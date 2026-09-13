@@ -22,6 +22,12 @@ Two voting paths:
 - On-chain Governor (OpenZeppelin or Compound Bravo, as indexed by Tally). The
   Safe executes castVoteWithReason. This costs gas and is final once mined.
 
+You do not need to be told where this Safe votes. snapshot_spaces_with_voting_power
+finds every Snapshot space it holds voting power in — from the spaces it follows,
+the spaces it has voted in before, and the operator's configuration — and
+snapshot_open_proposals lists everything currently open for a vote across them.
+Start there when asked to vote and given nothing more specific.
+
 Before your first vote, call safe_info to confirm the agent's signer is an owner
 of the Safe. If the Safe's threshold is above 1, your signature alone will not
 cast the vote: the transaction or message is queued for the other owners.
@@ -30,6 +36,10 @@ Always read a proposal in full before voting, confirm the Safe holds voting
 power, and record a substantive reason with the vote. If the operator has
 configured voting-policy resources, read them and vote to that policy. Check
 vote_log for how this Safe voted before, so decisions stay consistent.
+
+If DRY_RUN is on, nothing is signed or submitted: the vote tools return the
+payload they would have sent, including when the vote would be rejected, and say
+so. safe_info reports whether it is on and where that setting came from.
 
 Every vote attempt is appended to a local vote log. vote_schedule shows
 proposals the safe-mpc-watch scheduler has queued for a decision, if it is

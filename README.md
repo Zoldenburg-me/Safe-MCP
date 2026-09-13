@@ -14,6 +14,7 @@ polls for new proposals and asks an agent to decide as each deadline
 approaches.
 
 - [How voting works](#how-voting-works)
+- [Where the Safe votes](#where-the-safe-votes)
 - [Setup](#setup)
 - [Which account needs ETH](#which-account-needs-eth)
 - [Tools](#tools)
@@ -49,6 +50,45 @@ and basic, `uint32[]` for approval and ranked-choice, a JSON string for weighted
 and quadratic). The hub re-derives the typed-data hash from the payload it
 receives, so this has to agree exactly.
 
+## Where the Safe votes
+
+You should not have to hand the agent a list of DAOs. Safe-MPC works out where
+the Safe can vote and asks it to vote there.
+
+`snapshot_spaces_with_voting_power` assembles the candidates from four places —
+the spaces the Safe **follows** on Snapshot, the spaces it has **voted in
+before**, the spaces you configured, and the test space — then reads the Safe's
+voting power in each and keeps the ones where it has any.
+`snapshot_open_proposals` turns that into the Safe's actual ballot: every
+proposal open for a vote across those spaces, soonest deadline first.
+
+```
+> Which DAOs can this Safe vote in, and is anything open?
+
+  snapshot_spaces_with_voting_power → 2 spaces
+  snapshot_open_proposals           → 3 proposals, one closing in 4h
+```
+
+The scheduler uses the same discovery. With `WATCH_SNAPSHOT_AUTO=true`, which is
+the default, `safe-mpc-watch` re-resolves the watched spaces on **every pass**,
+so a Safe that is delegated voting power in a new space starts being asked to
+vote there without anyone editing a config file. `WATCH_SNAPSHOT_SPACES` still
+names spaces explicitly, and those are watched even at zero voting power,
+because a space you named on purpose may be about to grant the Safe weight.
+
+Voting power here is read at the current block, which answers "is this space
+worth watching". Whether a particular vote will count is a different question,
+asked again per proposal at that proposal's snapshot block before anything is
+signed.
+
+`SNAPSHOT_TEST_SPACE` defaults to `staging.daoplomats.eth`: a space that is
+always tested and always watched, so a fresh install has somewhere to exercise
+the whole path end to end before being pointed at a DAO that matters. Set it
+empty in `.env` to drop it.
+
+If `ALLOWED_SNAPSHOT_SPACES` is set, it wins over all of this. Spaces outside
+the allowlist are never tested, never watched, and never voted in.
+
 ## Setup
 
 ### 1. Install
@@ -70,19 +110,24 @@ npm run setup
 ```
 
 It generates the agent's EOA, shows you the address to add as a Safe owner,
-asks for the Safe and chain, and writes `.env` with mode 600 and `DRY_RUN=true`.
-For scripts and containers there is a non-interactive form:
+asks for the Safe and chain, and writes `.env` with mode 600. Votes are live from
+the start: setup writes `DRY_RUN=false`, and `--dry-run` is how you opt into a
+rehearsal instead. For scripts and containers there is a non-interactive form:
 
 ```bash
 node dist/setup.js --safe 0xYourSafe --chain 1 --rpc https://... --api-key ...
+node dist/setup.js --safe 0xYourSafe --space mydao.eth --dry-run
 node dist/setup.js --new-key      # just print a fresh keypair, write nothing
 npm run check                     # verify readiness against the live chain
 ```
 
 `npm run check` is worth running before you wire up any agent. It reports the
 chain, both addresses, the agent's ETH balance, whether the agent is an owner,
-the threshold, and, if a Safe API key is set, every Safe the agent owns on that
-chain. It exits non-zero and names what is missing when the agent cannot vote.
+the threshold, **every Snapshot space the Safe holds voting power in**, and, if a
+Safe API key is set, every Safe the agent owns on that chain. It exits non-zero
+and names what is missing when the agent cannot vote — including a Safe with no
+voting power anywhere, which is the failure that otherwise only shows up when a
+vote is rejected.
 
 The server and the watcher both read `.env` from the working directory and then
 from the package root, so you do not have to repeat the config in your MCP
@@ -113,9 +158,17 @@ all. Snapshot voting needs a `SAFE_API_KEY` from
 [developer.safe.global](https://developer.safe.global), because the Safe message
 service assembles the EIP-1271 signature.
 
-**Setup leaves `DRY_RUN=true`.** Every vote tool returns the exact payload it
-would have submitted and signs nothing. Turn it off once you have watched a dry
-run and are happy.
+**Votes are live unless you ask otherwise.** `DRY_RUN` is off by default and
+setup writes `DRY_RUN=false`. Set it to `true` — or run setup with `--dry-run` —
+and every vote tool returns the exact payload it would have submitted, signing
+nothing. A dry run reports blocked votes too, payload included, so the path can
+be demonstrated on a Safe that has no voting power yet.
+
+A variable set in the process environment beats `.env`. An MCP client that
+launches the server with `"DRY_RUN": "true"` in its own config keeps winning over
+the file however many times you edit it, and a plain restart may not reload that
+config — the server entry has to be updated. `safe_info` reports both the value
+in force and where it came from, so this is visible rather than baffling.
 
 ### 5. Write a voting policy
 
@@ -144,8 +197,7 @@ Claude Desktop or Cursor, in the MCP config file:
         "SAFE_AGENT_PRIVATE_KEY": "0x...",
         "SAFE_CHAIN_ID": "1",
         "SAFE_RPC_URL": "https://...",
-        "SAFE_API_KEY": "...",
-        "DRY_RUN": "true"
+        "SAFE_API_KEY": "..."
       }
     }
   }
@@ -191,6 +243,8 @@ those at zero, so no refund happens and the accounting stays simple.
 | `safe_info` | read | Chain, owners, threshold, nonce, balance, and whether the agent can vote alone. |
 | `safe_pending_transactions` | read | Transactions queued on the Safe. |
 | `safe_confirm_transaction` | write | Adds the agent's signature to a queued transaction, executing it if that meets the threshold. |
+| `snapshot_spaces_with_voting_power` | read | Every Snapshot space this Safe can vote in, found without being told where to look. |
+| `snapshot_open_proposals` | read | Everything open for a vote across those spaces, soonest deadline first. |
 | `snapshot_list_proposals` | read | Proposals in a space, open ones by default. |
 | `snapshot_get_proposal` | read | Full body, indexed choices, scores, the Safe's voting power, and any vote it already cast. |
 | `snapshot_voting_power` | read | The Safe's voting power on one proposal, by strategy. |
@@ -204,8 +258,9 @@ those at zero, so no refund happens and the accounting stays simple.
 | `vote_log` | read | Every vote this Safe has cast, with the choice and reason, so decisions stay consistent with precedent. |
 | `vote_schedule` | read | Proposals the scheduler has queued, and which are due now. |
 
-Three prompts wrap the tools into a reviewed workflow:
-`vote_on_snapshot_proposal`, `vote_on_governor_proposal`, and
+Four prompts wrap the tools into a reviewed workflow:
+`vote_on_snapshot_proposal`, `vote_on_governor_proposal`,
+`vote_on_every_open_proposal`, which works through the Safe's whole ballot, and
 `review_open_proposals`, which recommends votes without casting any.
 
 ### Choice format
@@ -241,15 +296,18 @@ jq -r '[.at, .venue, .choice, .outcome] | @tsv' data/votes.jsonl | column -t
 
 ## Unattended voting
 
-`safe-mpc-watch` is the unattended path. It polls the spaces and DAOs you
-name, queues each open proposal, and when a proposal is within
-`VOTE_BEFORE_CLOSE` of its deadline it runs your agent command to decide and
-vote. Voting late rather than on discovery means the decision reflects how
-sentiment developed, and leaves room to retry before the deadline.
+`safe-mpc-watch` is the unattended path. It polls every Snapshot space the Safe
+can vote in — plus any space or Governor you name — queues each open proposal,
+and when a proposal is within `VOTE_BEFORE_CLOSE` of its deadline it runs your
+agent command to decide and vote. Voting late rather than on discovery means the
+decision reflects how sentiment developed, and leaves room to retry before the
+deadline.
 
 ```bash
-# In .env
-WATCH_SNAPSHOT_SPACES=ens.eth,aavedao.eth
+# In .env. Snapshot spaces are discovered automatically; everything here is
+# optional except the agent command.
+WATCH_SNAPSHOT_AUTO=true                # watch wherever the Safe has voting power
+WATCH_SNAPSHOT_SPACES=ens.eth,aavedao.eth   # watched as well, power or not
 WATCH_GOVERNORS=0x408ED6354d4973f66138C91495F2f2FCbd8724C3
 VOTE_BEFORE_CLOSE=6h
 POLL_INTERVAL=1h
@@ -272,7 +330,8 @@ and the restarts.
 The queue lives in `data/schedule.json` and survives restarts. A proposal keeps
 its status across passes, so a vote already cast is never repeated, and one that
 failed stays pending and is retried on the next pass until its deadline. Run
-`--plan` first, and keep `DRY_RUN=true` until the queue looks right.
+`--plan` first, and set `DRY_RUN=true` for the first live pass if you want to
+read the agent's reasoning before any vote is real.
 
 ### The agent command
 
@@ -337,9 +396,11 @@ in five ways:
   spaces and contracts. Anything else is refused before a signature is made.
   This is the single most effective control here; set it.
 - **`DRY_RUN`** signs and submits nothing while still exercising every read and
-  every validation.
+  every validation. It is off by default — votes are real unless you turn it on.
 - **Pre-flight checks** refuse votes that would be rejected or reverted anyway:
   closed proposals, zero voting power, a Governor proposal already voted on.
+  Under `DRY_RUN` these become reported blockers rather than refusals, and the
+  payload comes back anyway, so a rehearsal still shows you what it would sign.
 - **The Safe's own threshold** stays authoritative. Nothing here can execute
   past it.
 - **The vote log** makes every attempt reviewable after the fact, including the
@@ -412,7 +473,18 @@ unaffected and needs no ETH at all.
 
 **"no voting power"** — the Safe did not hold or was not delegated the
 governance token at the proposal's snapshot block. Delegation set up after that
-block does not apply retroactively.
+block does not apply retroactively. `snapshot_spaces_with_voting_power` with
+`includeZero: true` shows every space that was tested and what each returned,
+which is the quickest way to tell "wrong space" from "no tokens". Under
+`DRY_RUN` the vote tool returns the payload anyway, flagged as blocked, so the
+path can still be demonstrated.
+
+**`dryRun: true` when `.env` says otherwise** — a variable in the process
+environment beats the file, and MCP clients pass their own `env` block to the
+server. Editing `.env` cannot fix that, and neither can a restart if the client
+re-reads its cached config: remove `DRY_RUN` from the client's server entry, or
+set it there to `"false"`. `safe_info` reports `dryRunSource`, which says which
+of the two is in force.
 
 **"signed by 1 of 2 required owners"** — expected on a multi-owner Safe. The
 message hash is in the result; once the other owners sign it in the Safe UI, call
@@ -422,9 +494,11 @@ message hash is in the result; once the other owners sign it in the Safe UI, cal
 signature: a minimum-balance requirement, or voting closed between the read and
 the submission. The sequencer's own message is passed through verbatim.
 
-**The watcher queues nothing** — `--plan` prints what each space and governor
-returned. An empty result usually means the space id or governor address is
-wrong, or nothing is open right now. For on-chain proposals, the log line
+**The watcher queues nothing** — `--plan` prints the spaces it resolved, the
+Safe's voting power in each, and what every space and governor returned. An empty
+result usually means the Safe has no voting power anywhere and no space was named
+explicitly, or the space id or governor address is wrong, or nothing is open
+right now. For on-chain proposals, the log line
 reports the scan window that was used; check that it reaches back past the
 proposal's creation, and that the governor is on `SAFE_CHAIN_ID`.
 

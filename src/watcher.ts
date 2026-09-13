@@ -16,6 +16,7 @@ import { hasVotedOn } from "./voteLog.js";
 import * as snapshot from "./platforms/snapshot.js";
 import * as tally from "./platforms/tally.js";
 import * as indexer from "./platforms/governorIndexer.js";
+import { resolveWatchedSpaces } from "./spaces.js";
 import type { Config } from "./config.js";
 
 /** Closed proposals stay in the schedule this long, for visibility. */
@@ -117,11 +118,46 @@ export function renderArgv(argv: string[], entry: ScheduledVote): string[] {
   );
 }
 
-/** Discovers open Snapshot proposals in every watched space. */
+/**
+ * Discovers open Snapshot proposals in every watched space.
+ *
+ * The watched set is resolved on every pass rather than read once at startup:
+ * with WATCH_SNAPSHOT_AUTO on it includes every space the Safe currently holds
+ * voting power in, and that changes as tokens move or delegations land. A Safe
+ * that is given voting power in a new space starts being asked to vote there
+ * without anyone editing a list.
+ */
 export async function discoverSnapshot(config: Config): Promise<DiscoveredProposal[]> {
   const found: DiscoveredProposal[] = [];
 
-  for (const space of config.WATCH_SNAPSHOT_SPACES) {
+  const { spaces, discovered } = await resolveWatchedSpaces(config);
+
+  const withPower = discovered.filter((row) => row.votingPower > 0);
+  const unreadable = discovered.filter((row) => row.error !== null);
+
+  if (withPower.length > 0) {
+    log(
+      `snapshot: voting power in ${withPower.length} space(s): ` +
+        withPower.map((row) => `${row.space} (${row.votingPower})`).join(", ")
+    );
+  }
+
+  if (unreadable.length > 0) {
+    log(
+      `snapshot: could not read voting power in ${unreadable.length} space(s), ` +
+        `watching them anyway: ${unreadable.map((row) => row.space).join(", ")}`
+    );
+  }
+
+  if (spaces.length === 0) {
+    log(
+      "snapshot: no spaces to watch. The Safe holds no Snapshot voting power and " +
+        "WATCH_SNAPSHOT_SPACES is empty."
+    );
+    return found;
+  }
+
+  for (const space of spaces) {
     try {
       const proposals = await snapshot.listProposals(config, {
         space,

@@ -36,6 +36,25 @@ export interface SnapshotVote {
   created: number;
 }
 
+/** A Snapshot space, as much of it as space discovery needs. */
+export interface SnapshotSpace {
+  id: string;
+  name: string | null;
+  symbol: string | null;
+  network: string | null;
+  followersCount: number | null;
+  proposalsCount: number | null;
+}
+
+const SPACE_FIELDS = `
+  id
+  name
+  symbol
+  network
+  followersCount
+  proposalsCount
+`;
+
 const PROPOSAL_FIELDS = `
   id
   title
@@ -134,14 +153,23 @@ export async function getProposal(
   return data.proposal;
 }
 
-/** Voting power the Safe holds on a given proposal, per the space's strategies. */
+/**
+ * Voting power a voter holds in a space. With a proposal id this is the power
+ * at that proposal's snapshot block, which is what the hub checks when the vote
+ * lands; without one it is the power right now, which is what tells you whether
+ * the space is worth watching at all.
+ */
 export async function getVotingPower(
   config: Config,
-  args: { space: string; proposalId: string; voter: string }
+  args: { space: string; proposalId?: string; voter: string }
 ): Promise<{ vp: number; vpByStrategy: number[]; vpState: string | null }> {
+  // `proposal` is optional on the hub, but a declared variable must be passed,
+  // so the query is built to match the arguments actually being sent.
+  const scoped = args.proposalId !== undefined;
+
   const query = `
-    query VotingPower($voter: String!, $space: String!, $proposal: String!) {
-      vp(voter: $voter, space: $space, proposal: $proposal) {
+    query VotingPower($voter: String!, $space: String!${scoped ? ", $proposal: String!" : ""}) {
+      vp(voter: $voter, space: $space${scoped ? ", proposal: $proposal" : ""}) {
         vp
         vp_by_strategy
         vp_state
@@ -154,7 +182,7 @@ export async function getVotingPower(
   }>(config, query, {
     voter: args.voter,
     space: args.space,
-    proposal: args.proposalId,
+    ...(scoped ? { proposal: args.proposalId } : {}),
   });
 
   return {
@@ -162,6 +190,104 @@ export async function getVotingPower(
     vpByStrategy: data.vp?.vp_by_strategy ?? [],
     vpState: data.vp?.vp_state ?? null,
   };
+}
+
+/** Reads one space, or null when the id does not exist. */
+export async function getSpace(
+  config: Config,
+  id: string
+): Promise<SnapshotSpace | null> {
+  const query = `
+    query Space($id: String!) {
+      space(id: $id) { ${SPACE_FIELDS} }
+    }
+  `;
+
+  const data = await hubQuery<{ space: SnapshotSpace | null }>(config, query, { id });
+
+  return data.space ?? null;
+}
+
+/** Reads several spaces at once. Unknown ids are simply absent from the result. */
+export async function listSpacesByIds(
+  config: Config,
+  ids: string[]
+): Promise<SnapshotSpace[]> {
+  if (ids.length === 0) return [];
+
+  const query = `
+    query Spaces($ids: [String]!, $limit: Int!) {
+      spaces(first: $limit, where: { id_in: $ids }) { ${SPACE_FIELDS} }
+    }
+  `;
+
+  const data = await hubQuery<{ spaces: SnapshotSpace[] }>(config, query, {
+    ids,
+    limit: ids.length,
+  });
+
+  return data.spaces ?? [];
+}
+
+/**
+ * Spaces an address follows. Following a space is the closest thing Snapshot
+ * has to membership, so it is the first place to look for spaces this Safe
+ * cares about.
+ */
+export async function listFollowedSpaces(
+  config: Config,
+  follower: string,
+  limit = 100
+): Promise<SnapshotSpace[]> {
+  const query = `
+    query Follows($follower: String!, $limit: Int!) {
+      follows(first: $limit, where: { follower: $follower }) {
+        space { ${SPACE_FIELDS} }
+      }
+    }
+  `;
+
+  const data = await hubQuery<{ follows: Array<{ space: SnapshotSpace | null }> }>(
+    config,
+    query,
+    { follower, limit }
+  );
+
+  return (data.follows ?? [])
+    .map((follow) => follow.space)
+    .filter((space): space is SnapshotSpace => Boolean(space?.id));
+}
+
+/** Spaces an address has voted in before, newest first, de-duplicated. */
+export async function listVotedSpaceIds(
+  config: Config,
+  voter: string,
+  limit = 100
+): Promise<string[]> {
+  const query = `
+    query VotedSpaces($voter: String!, $limit: Int!) {
+      votes(
+        first: $limit
+        where: { voter: $voter }
+        orderBy: "created"
+        orderDirection: desc
+      ) {
+        space { id }
+      }
+    }
+  `;
+
+  const data = await hubQuery<{ votes: Array<{ space: { id: string } | null }> }>(
+    config,
+    query,
+    { voter, limit }
+  );
+
+  const ids = (data.votes ?? [])
+    .map((vote) => vote.space?.id)
+    .filter((id): id is string => Boolean(id));
+
+  return [...new Set(ids)];
 }
 
 /** Votes already cast on a proposal by a given voter (empty when it has not voted). */

@@ -31,14 +31,20 @@ async function main(): Promise<void> {
 
   const config = loadConfig();
 
+  // With auto-discovery on there is always something to watch: the watcher
+  // finds the Snapshot spaces the Safe holds voting power in on every pass.
   if (
+    !config.WATCH_SNAPSHOT_AUTO &&
     config.WATCH_SNAPSHOT_SPACES.length === 0 &&
+    !config.SNAPSHOT_TEST_SPACE &&
     config.WATCH_GOVERNORS.length === 0 &&
     config.WATCH_TALLY_SLUGS.length === 0
   ) {
     throw new Error(
-      "Nothing to watch. Set WATCH_SNAPSHOT_SPACES (Snapshot space ids) and/or " +
-        "WATCH_GOVERNORS (Governor contract addresses on this chain)."
+      "Nothing to watch, and WATCH_SNAPSHOT_AUTO is off. Either turn it back on to " +
+        "watch every Snapshot space the Safe can vote in, or set WATCH_SNAPSHOT_SPACES " +
+        "(Snapshot space ids) and/or WATCH_GOVERNORS (Governor contract addresses on " +
+        "this chain)."
     );
   }
 
@@ -52,12 +58,27 @@ async function main(): Promise<void> {
     );
   }
 
+  // The test space is watched alongside the configured ones, so name it here
+  // rather than leaving the operator to wonder where it came from.
+  const explicitSpaces = [...config.WATCH_SNAPSHOT_SPACES];
+  if (
+    config.SNAPSHOT_TEST_SPACE &&
+    !explicitSpaces.includes(config.SNAPSHOT_TEST_SPACE)
+  ) {
+    explicitSpaces.push(`${config.SNAPSHOT_TEST_SPACE} (test space)`);
+  }
+
   const intervalMs = parseDuration(config.POLL_INTERVAL);
   const leadMs = parseDuration(config.VOTE_BEFORE_CLOSE);
 
   console.error(
     `safe-mpc-watch: Safe ${config.SAFE_ADDRESS} on ${getChainName(config.SAFE_CHAIN_ID)}\n` +
-      `  spaces:   ${config.WATCH_SNAPSHOT_SPACES.join(", ") || "(none)"}\n` +
+      `  spaces:   ${explicitSpaces.join(", ") || "(none configured)"}\n` +
+      `  auto:     ${
+        config.WATCH_SNAPSHOT_AUTO
+          ? "on — also every Snapshot space the Safe has voting power in"
+          : "off"
+      }\n` +
       `  governors: ${config.WATCH_GOVERNORS.join(", ") || "(none)"}\n` +
       (config.WATCH_TALLY_SLUGS.length > 0
         ? `  hosted:   ${config.WATCH_TALLY_SLUGS.join(", ")} (legacy, Tally shut down)\n`

@@ -30,6 +30,14 @@ const bool = z
   .optional()
   .transform((raw) => raw === "1" || raw?.toLowerCase() === "true");
 
+/** Same, but for a flag that is on unless the operator turns it off. */
+const boolOn = z
+  .string()
+  .optional()
+  .transform((raw) =>
+    raw === undefined || raw === "" ? true : !(raw === "0" || raw.toLowerCase() === "false")
+  );
+
 const envSchema = z.object({
   SAFE_ADDRESS: address,
   SAFE_AGENT_PRIVATE_KEY: privateKey,
@@ -40,6 +48,14 @@ const envSchema = z.object({
 
   SNAPSHOT_HUB_URL: z.string().url().default("https://hub.snapshot.org"),
   SNAPSHOT_SEQUENCER_URL: z.string().url().default("https://seq.snapshot.org"),
+
+  // The space wired up for end-to-end testing. It is always a candidate for
+  // space discovery and is always watched, so a fresh install has somewhere to
+  // exercise the vote path without editing any list. Set it empty to drop it.
+  SNAPSHOT_TEST_SPACE: z
+    .string()
+    .optional()
+    .transform((raw) => (raw ?? "staging.daoplomats.eth").trim().toLowerCase()),
 
   // Tally shut down in March 2026 and the platform is now Cactus, run by
   // ScopeLift. These are optional: on-chain discovery needs no API at all.
@@ -57,7 +73,16 @@ const envSchema = z.object({
   // Vote log and scheduler
   VOTE_LOG_PATH: z.string().default("data/votes.jsonl"),
   SCHEDULE_PATH: z.string().default("data/schedule.json"),
-  WATCH_SNAPSHOT_SPACES: csv,
+  WATCH_SNAPSHOT_SPACES: csvLower,
+
+  // Watch every Snapshot space the Safe can actually vote in, on top of the
+  // explicit list above. This is what makes unattended voting work without the
+  // operator maintaining a list of spaces by hand.
+  WATCH_SNAPSHOT_AUTO: boolOn,
+
+  // Spaces the Safe follows or has voted in are the discovery seed; these are
+  // extra ids to test for voting power that discovery would not find on its own.
+  SNAPSHOT_SPACE_CANDIDATES: csvLower,
   WATCH_GOVERNORS: csv,
   WATCH_TALLY_SLUGS: csv,
   POLL_INTERVAL: z.string().default("1h"),
