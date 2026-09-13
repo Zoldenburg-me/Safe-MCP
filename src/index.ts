@@ -3,7 +3,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { loadDotEnv } from "./dotenv.js";
 import { loadConfig } from "./config.js";
-import { getAgentAddress } from "./safe.js";
+import { assertSafeServiceConfigured, getAgentAddress } from "./safe.js";
 import { getChainName } from "./chains.js";
 import { registerSafeTools } from "./tools/safeTools.js";
 import { registerSnapshotTools } from "./tools/snapshotTools.js";
@@ -50,6 +50,9 @@ async function main(): Promise<void> {
   loadDotEnv();
 
   const config = loadConfig();
+
+  // Refuse to start rather than fail on the agent's first Safe tool call.
+  assertSafeServiceConfigured(config);
 
   const server = new McpServer(
     { name: "safe-mpc", version: "0.1.0" },
