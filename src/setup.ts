@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { formatEther, getAddress } from "viem";
 import { generatePrivateKey, privateKeyToAccount } from "viem/accounts";
 import SafeApiKitModule from "@safe-global/api-kit";
-import { loadDotEnv, packageRoot } from "./dotenv.js";
+import { describeEnvSource, loadDotEnv, packageRoot } from "./dotenv.js";
 import { getChainName, resolveRpcUrl } from "./chains.js";
 
 const USAGE = `
@@ -19,11 +19,21 @@ Non-interactive, for scripts and containers:
 
   safe-mpc-setup --safe 0xSafe [--chain 1] [--rpc URL] [--api-key KEY]
                  [--key 0xPrivateKey]      reuse a key instead of generating one
+                 [--space a.eth,b.eth]     Snapshot spaces to watch, on top of the
+                                           ones the Safe has voting power in
+                 [--dry-run]               write DRY_RUN=true; off by default
 
   --force                    overwrite an existing .env
 
 There is no web UI. This command is the setup screen.
 `.trim();
+
+/**
+ * The space a fresh install is wired up to, so there is somewhere to exercise
+ * the whole vote path before pointing the agent at a DAO that matters. The
+ * server watches it alongside whatever spaces the Safe has voting power in.
+ */
+const DEFAULT_WATCH_SPACES = "staging.daoplomats.eth";
 
 const CHAINS: Array<{ id: number; label: string }> = [
   { id: 1, label: "Ethereum" },
@@ -99,7 +109,10 @@ async function check(): Promise<void> {
   console.log(`  Agent signer   ${agent}`);
   console.log(`  Safe           ${config.SAFE_ADDRESS}`);
   console.log(`  Safe API key   ${config.SAFE_API_KEY ? "set" : "NOT SET (Snapshot voting needs it)"}`);
-  console.log(`  Dry run        ${config.DRY_RUN ? "on" : "OFF — votes are real"}\n`);
+  console.log(
+    `  Dry run        ${config.DRY_RUN ? "on" : "OFF — votes are real"} ` +
+      `(from ${describeEnvSource("DRY_RUN")})\n`
+  );
 
   const problems: string[] = [];
 
@@ -164,6 +177,48 @@ async function check(): Promise<void> {
     }
   }
 
+  // Where the Safe can actually vote. This is the question an operator asks
+  // straight after "is the agent an owner", and answering it here saves
+  // assembling it by hand out of Snapshot and token balances.
+  try {
+    const { resolveWatchedSpaces } = await import("./spaces.js");
+    const { spaces, discovered } = await resolveWatchedSpaces(config);
+    const withPower = discovered.filter((row) => row.votingPower > 0);
+    const unreadable = discovered.filter((row) => row.error !== null);
+
+    console.log(
+      withPower.length > 0
+        ? `  Voting power in ${withPower.length} Snapshot space(s):\n` +
+            withPower
+              .map((row) => `    ${row.space}  ${row.votingPower}  (${row.sources.join(", ")})`)
+              .join("\n") +
+            "\n"
+        : "  The Safe holds no Snapshot voting power in any discovered space.\n"
+    );
+
+    console.log(`  Watching       ${spaces.join(", ") || "(nothing)"}\n`);
+
+    if (unreadable.length > 0) {
+      problems.push(
+        `Could not read the Safe's voting power in ${unreadable.length} space(s) ` +
+          `(${unreadable[0]!.space}: ${unreadable[0]!.error}). Until the Snapshot hub ` +
+          "is reachable, this says nothing either way about where the Safe can vote."
+      );
+    } else if (withPower.length === 0) {
+      problems.push(
+        "The Safe has no Snapshot voting power anywhere Safe-MPC can see, so any vote " +
+          "it casts would be rejected. Check that the Safe holds a space's voting token, " +
+          "or that delegation to it is in place."
+      );
+    }
+  } catch (error) {
+    console.log(
+      `  Could not read Snapshot voting power: ${
+        error instanceof Error ? error.message : String(error)
+      }\n`
+    );
+  }
+
   if (problems.length === 0) {
     console.log("Ready to vote.\n");
     return;
@@ -182,6 +237,9 @@ interface EnvOptions {
   chainId: number;
   rpcUrl: string;
   apiKey: string;
+  /** Comma-separated Snapshot spaces to watch explicitly. */
+  watchSpaces: string;
+  dryRun: boolean;
 }
 
 async function refuseIfPresent(force: boolean): Promise<void> {
@@ -220,8 +278,16 @@ async function writeEnv(options: EnvOptions): Promise<void> {
     options.rpcUrl ? `SAFE_RPC_URL=${options.rpcUrl}` : "# SAFE_RPC_URL=",
     options.apiKey ? `SAFE_API_KEY=${options.apiKey}` : "# SAFE_API_KEY=",
     "",
-    "# Start safe. Set to false once you have watched a dry run and are happy.",
-    "DRY_RUN=true",
+    "# Votes are real. Set DRY_RUN=true to have every vote tool return the payload",
+    "# it would have signed without submitting anything.",
+    `DRY_RUN=${options.dryRun}`,
+    "",
+    "# Snapshot spaces watched explicitly, on top of every space the Safe holds",
+    "# voting power in (see WATCH_SNAPSHOT_AUTO).",
+    `WATCH_SNAPSHOT_SPACES=${options.watchSpaces}`,
+    "",
+    "# Watch every Snapshot space the Safe can vote in, re-checked on every pass.",
+    "WATCH_SNAPSHOT_AUTO=true",
     "",
     "# Restrict where the agent may vote. Strongly recommended.",
     "# ALLOWED_SNAPSHOT_SPACES=",
@@ -243,12 +309,12 @@ async function writeEnv(options: EnvOptions): Promise<void> {
       `  Agent address: ${agent}`,
       `  Safe:          ${options.safeAddress}`,
       `  Chain:         ${getChainName(options.chainId)} (${options.chainId})`,
-      "",
-      "DRY_RUN is on, so nothing will be submitted until you turn it off.",
+      `  Watching:      ${options.watchSpaces || "(auto-discovered spaces only)"}`,
+      `  Dry run:       ${options.dryRun ? "on — nothing will be submitted" : "OFF — votes are real"}`,
       "",
       "Next:",
       `  1. add ${agent} as an owner of the Safe at https://app.safe.global`,
-      "  2. safe-mpc-setup --check        confirm the agent is an owner",
+      "  2. safe-mpc-setup --check        confirm ownership and see where it can vote",
       "  3. write your voting policy into knowledge/",
       `  4. claude mcp add safe-mpc -- node ${join(packageRoot(), "dist", "index.js")}`,
       "",
@@ -330,6 +396,19 @@ async function init(force: boolean): Promise<void> {
     ).trim();
 
     console.log(
+      "\nThe agent votes in every Snapshot space the Safe holds voting power in.\n" +
+        "Name any further spaces to watch as well, comma-separated.\n"
+    );
+
+    const watchSpaces =
+      (await ask(rl, `Extra Snapshot spaces [${DEFAULT_WATCH_SPACES}]: `)).trim() ||
+      DEFAULT_WATCH_SPACES;
+
+    const dryRun = (await ask(rl, "Start in dry-run mode (submit nothing)? [y/N] "))
+      .trim()
+      .toLowerCase();
+
+    console.log(
       `\nNow add ${agent} as an owner of your Safe at https://app.safe.global,\n` +
         "under Settings then Setup then Add new owner. Then come back here.\n"
     );
@@ -358,6 +437,8 @@ async function init(force: boolean): Promise<void> {
       chainId,
       rpcUrl,
       apiKey,
+      watchSpaces,
+      dryRun: dryRun === "y" || dryRun === "yes",
     });
   } finally {
     rl.close();
@@ -372,7 +453,14 @@ interface Flags {
 function parseFlags(argv: string[]): Flags {
   const bare = new Set<string>();
   const values = new Map<string, string>();
-  const takesValue = new Set(["--safe", "--chain", "--rpc", "--api-key", "--key"]);
+  const takesValue = new Set([
+    "--safe",
+    "--chain",
+    "--rpc",
+    "--api-key",
+    "--key",
+    "--space",
+  ]);
 
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i]!;
@@ -415,6 +503,8 @@ async function main(): Promise<void> {
       chainId: Number(flags.values.get("--chain") ?? 1),
       rpcUrl: flags.values.get("--rpc") ?? "",
       apiKey: flags.values.get("--api-key") ?? "",
+      watchSpaces: flags.values.get("--space") ?? DEFAULT_WATCH_SPACES,
+      dryRun: flags.bare.has("--dry-run"),
     });
   }
 

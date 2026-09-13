@@ -154,14 +154,53 @@ export function registerPrompts(server: McpServer, config: Config): void {
   );
 
   server.registerPrompt(
+    "vote_on_every_open_proposal",
+    {
+      title: "Vote on everything open",
+      description:
+        "Finds every Snapshot space the Safe holds voting power in, then decides and " +
+        "casts a vote on each proposal open there, against the operator's policy.",
+      argsSchema: {},
+    },
+    async () => ({
+      messages: [
+        {
+          role: "user" as const,
+          content: {
+            type: "text" as const,
+            text: paragraphs(
+              "Cast the Safe's vote on every Snapshot proposal it can currently vote on.",
+              await policyBlock(config),
+              "Start with snapshot_open_proposals, which lists the open proposals across " +
+                "every space the Safe has voting power in, soonest deadline first. Work " +
+                "through them in that order.",
+              "Check vote_log first and skip any proposal the Safe has already voted on " +
+                "unless the policy calls for changing the vote.",
+              VOTE_WORKFLOW,
+              "Report a line per proposal: space, title, choice, and whether the vote was " +
+                "cast, skipped or blocked. Do not stop the run because one proposal failed."
+            ),
+          },
+        },
+      ],
+    })
+  );
+
+  server.registerPrompt(
     "review_open_proposals",
     {
       title: "Review every open proposal",
       description:
-        "Surveys the open proposals in a Snapshot space and recommends a vote on " +
-        "each one, without casting anything.",
+        "Surveys the open proposals in a Snapshot space — or in every space the Safe " +
+        "can vote in — and recommends a vote on each one, without casting anything.",
       argsSchema: {
-        space: z.string().describe('Snapshot space id, e.g. "ens.eth"'),
+        space: z
+          .string()
+          .optional()
+          .describe(
+            'Snapshot space id, e.g. "ens.eth". Leave it out to survey every space ' +
+              "the Safe has voting power in."
+          ),
       },
     },
     async ({ space }) => ({
@@ -171,8 +210,12 @@ export function registerPrompts(server: McpServer, config: Config): void {
           content: {
             type: "text" as const,
             text: paragraphs(
-              `List every open proposal in the Snapshot space ${space} and recommend how ` +
-                "the Safe should vote on each.",
+              space
+                ? `List every open proposal in the Snapshot space ${space} and recommend how ` +
+                    "the Safe should vote on each."
+                : "List every open proposal the Safe can vote on, across every Snapshot " +
+                    "space it holds voting power in, and recommend how it should vote on " +
+                    "each. Use snapshot_open_proposals to find them.",
               await policyBlock(config),
               "Read each proposal before recommending. Do not cast any votes: report a " +
                 "table of proposal, recommended choice, and a one-sentence reason, then " +
