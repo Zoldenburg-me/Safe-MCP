@@ -38,6 +38,22 @@ export function parseDotEnv(contents: string): Record<string, string> {
   return values;
 }
 
+/** Which keys came out of a .env file, and which file it was. */
+const fromFile = new Map<string, string>();
+
+/**
+ * Where a variable's value came from. A stale DRY_RUN is the single most
+ * confusing failure in this server — an MCP client that caches its launch
+ * config will keep passing the old value through the environment, where it
+ * silently wins over the .env file the operator just edited — so every readiness
+ * report says which of the two is in force.
+ */
+export function describeEnvSource(key: string): string {
+  if (process.env[key] === undefined) return "unset (using the default)";
+  const path = fromFile.get(key);
+  return path ? `.env (${path})` : "the process environment, which overrides .env";
+}
+
 /**
  * Loads .env from the working directory, then from the package root, without
  * overriding anything already in the environment. An MCP client may launch the
@@ -59,7 +75,10 @@ export function loadDotEnv(explicitPath?: string): string | null {
 
     for (const [key, value] of Object.entries(parseDotEnv(contents))) {
       // A real environment variable always wins over the file.
-      if (process.env[key] === undefined) process.env[key] = value;
+      if (process.env[key] === undefined) {
+        process.env[key] = value;
+        fromFile.set(key, path);
+      }
     }
 
     return path;
