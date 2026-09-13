@@ -3,6 +3,7 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { assertAgentCanSign, getMessageClient, getSafeClient } from "../safe.js";
 import { assertSpaceAllowed, type Config } from "../config.js";
 import * as snapshot from "../platforms/snapshot.js";
+import { discoverVotingSpaces } from "../spaces.js";
 import { appendVote, type VoteOutcome } from "../voteLog.js";
 import { guard, isoTime, json, relativeTime } from "./shared.js";
 
@@ -79,6 +80,156 @@ async function awaitPreparedSignature(
 }
 
 export function registerSnapshotTools(server: McpServer, config: Config): void {
+  server.registerTool(
+    "snapshot_spaces_with_voting_power",
+    {
+      title: "Snapshot spaces this Safe can vote in",
+      description:
+        "Finds every Snapshot space where the Safe holds voting power, without " +
+        "needing a list up front: it tests the configured spaces, the spaces the " +
+        "Safe follows, and the spaces it has voted in before. Start here when you " +
+        "do not know where this Safe votes.",
+      inputSchema: {
+        spaces: z
+          .array(z.string())
+          .optional()
+          .describe("Extra space ids to test, on top of the ones discovered automatically"),
+        includeZero: z
+          .boolean()
+          .default(false)
+          .describe("Also return spaces where the Safe has no voting power"),
+      },
+      annotations: { readOnlyHint: true, openWorldHint: true },
+    },
+    guard(async ({ spaces, includeZero }) => {
+      const rows = await discoverVotingSpaces(config, {
+        ...(spaces ? { spaces } : {}),
+        includeZero,
+        includeDisallowed: includeZero,
+      });
+
+      const withPower = rows.filter((row) => row.votingPower > 0);
+      const unreadable = rows.filter((row) => row.error !== null);
+
+      const caveat =
+        unreadable.length > 0
+          ? ` Voting power could not be read in ${unreadable.length} space(s) ` +
+            `(${unreadable.map((row) => row.space).join(", ")}), so this list may be ` +
+            "incomplete."
+          : "";
+
+      return json(
+        {
+          safeAddress: config.SAFE_ADDRESS,
+          count: rows.length,
+          spacesWithVotingPower: withPower.length,
+          unreadable: unreadable.length,
+          spaces: rows.map((row) => ({
+            ...row,
+            url: `https://snapshot.box/#/s:${row.space}`,
+          })),
+        },
+        (withPower.length === 0
+          ? `The Safe ${config.SAFE_ADDRESS} holds no Snapshot voting power in any ` +
+            "discovered space. Check that it holds the space's voting token, or that " +
+            "delegation is in place."
+          : `The Safe can vote in ${withPower.length} space(s): ` +
+            withPower.map((row) => `${row.space} (${row.votingPower})`).join(", ") +
+            ".") + caveat
+      );
+    })
+  );
+
+  server.registerTool(
+    "snapshot_open_proposals",
+    {
+      title: "Every open proposal this Safe can vote on",
+      description:
+        "Lists the proposals currently open for voting across every Snapshot space " +
+        "the Safe holds voting power in, soonest deadline first, with the Safe's " +
+        "voting power on each. This is the whole of the Safe's Snapshot ballot: use " +
+        "it to decide what needs a vote, then snapshot_get_proposal to read one.",
+      inputSchema: {
+        spaces: z
+          .array(z.string())
+          .optional()
+          .describe("Restrict to these space ids instead of every space with voting power"),
+        limitPerSpace: z.number().int().min(1).max(50).default(20),
+      },
+      annotations: { readOnlyHint: true, openWorldHint: true },
+    },
+    guard(async ({ spaces, limitPerSpace }) => {
+      // With spaces named explicitly, report their voting power even when it is
+      // zero: the caller asked about those spaces and "zero" is the answer.
+      const discovered = await discoverVotingSpaces(config, {
+        ...(spaces ? { spaces, includeZero: true } : {}),
+      });
+
+      const selected =
+        spaces && spaces.length > 0
+          ? spaces.map((space) => space.trim().toLowerCase())
+          : discovered.map((row) => row.space);
+
+      const powerBySpace = new Map(
+        discovered.map((row) => [row.space, row.votingPower])
+      );
+
+      const perSpace = await Promise.all(
+        selected.map(async (space) => {
+          try {
+            const proposals = await snapshot.listProposals(config, {
+              space,
+              state: "active",
+              limit: limitPerSpace,
+            });
+            return { space, proposals, error: null as string | null };
+          } catch (error) {
+            return {
+              space,
+              proposals: [],
+              error: error instanceof Error ? error.message : String(error),
+            };
+          }
+        })
+      );
+
+      const rows = perSpace
+        .flatMap(({ space, proposals }) =>
+          proposals.map((proposal) => ({
+            id: proposal.id,
+            space,
+            title: proposal.title,
+            votingSystem: proposal.type,
+            choices: proposal.choices,
+            end: isoTime(proposal.end),
+            closesIn: relativeTime(proposal.end),
+            endsAtSeconds: Number(proposal.end),
+            safeVotingPower: powerBySpace.get(space) ?? null,
+            url: `https://snapshot.box/#/s:${space}/proposal/${proposal.id}`,
+          }))
+        )
+        .sort((a, b) => a.endsAtSeconds - b.endsAtSeconds)
+        .map(({ endsAtSeconds: _endsAtSeconds, ...row }) => row);
+
+      const failures = perSpace.filter((entry) => entry.error !== null);
+
+      return json(
+        {
+          safeAddress: config.SAFE_ADDRESS,
+          spacesChecked: selected,
+          count: rows.length,
+          proposals: rows,
+          errors: failures.map((entry) => ({ space: entry.space, error: entry.error })),
+        },
+        selected.length === 0
+          ? "The Safe holds voting power in no Snapshot space, so there is nothing to vote on."
+          : rows.length === 0
+            ? `No proposals are open in ${selected.length} space(s): ${selected.join(", ")}.`
+            : `${rows.length} open proposal(s) across ${selected.length} space(s), soonest deadline first.`
+      );
+    })
+  );
+
   server.registerTool(
     "snapshot_list_proposals",
     {
@@ -248,8 +399,14 @@ export function registerSnapshotTools(server: McpServer, config: Config): void {
 
       assertSpaceAllowed(config, space);
 
+      // Pre-flight. A live vote stops here; a dry run reports the blockers and
+      // still returns the payload, because "what would you have signed" is the
+      // question a dry run exists to answer — and a Safe with no voting power
+      // yet is exactly when an operator most wants to see it.
+      const blockers: string[] = [];
+
       if (proposal.state !== "active") {
-        throw new Error(
+        blockers.push(
           `Proposal ${proposalId} is "${proposal.state}", not active. ` +
             (proposal.state === "pending"
               ? `Voting opens ${isoTime(proposal.start)}.`
@@ -257,7 +414,6 @@ export function registerSnapshotTools(server: McpServer, config: Config): void {
         );
       }
 
-      // Reject early rather than burning a signature on a vote the hub will drop.
       const power = await snapshot.getVotingPower(config, {
         space,
         proposalId,
@@ -265,12 +421,16 @@ export function registerSnapshotTools(server: McpServer, config: Config): void {
       });
 
       if (power.vp <= 0) {
-        throw new Error(
+        blockers.push(
           `The Safe ${config.SAFE_ADDRESS} has no voting power on proposal ${proposalId}, ` +
             "so Snapshot would reject the vote. Check that the Safe holds the space's " +
             "voting token, or that delegation is in place, at the proposal's snapshot block " +
             `(${proposal.snapshot}).`
         );
+      }
+
+      if (blockers.length > 0 && !config.DRY_RUN) {
+        throw new Error(blockers.join(" "));
       }
 
       const typedData = snapshot.buildVoteTypedData({
@@ -308,20 +468,30 @@ export function registerSnapshotTools(server: McpServer, config: Config): void {
         });
 
       if (config.DRY_RUN) {
-        await record("dry-run", {});
+        await record("dry-run", {
+          error: blockers.length > 0 ? blockers.join(" ") : null,
+        });
 
         return json(
           {
             dryRun: true,
+            blocked: blockers.length > 0,
+            blockers,
             proposalId,
             space,
+            proposalTitle: proposal.title,
+            proposalState: proposal.state,
             votingSystem: proposal.type,
             choice: chosen,
+            rawChoice: typedData.message.choice,
             reason,
             votingPower: power.vp,
             typedData,
           },
-          `DRY_RUN is on. Would have voted "${chosen}" on "${proposal.title}".`
+          blockers.length > 0
+            ? `DRY_RUN is on, and this vote would be REJECTED if submitted: ${blockers.join(" ")} ` +
+                `The payload that would have been signed is below.`
+            : `DRY_RUN is on. Would have voted "${chosen}" on "${proposal.title}".`
         );
       }
 

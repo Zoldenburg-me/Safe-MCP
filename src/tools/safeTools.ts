@@ -2,6 +2,7 @@ import { z } from "zod";
 import { formatEther } from "viem";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { getAgentAddress, getPublicClient, getSafeClient } from "../safe.js";
+import { describeEnvSource } from "../dotenv.js";
 import { explorerTxUrl, getChainName } from "../chains.js";
 import { guard, json, text } from "./shared.js";
 import type { Config } from "../config.js";
@@ -60,6 +61,12 @@ export function registerSafeTools(server: McpServer, config: Config): void {
           canVoteOnSnapshot: isOwner,
           canVoteOnChain: isOwner && agentIsFunded,
           dryRun: config.DRY_RUN,
+          // Where DRY_RUN was read from. An MCP client that caches its launch
+          // config keeps passing a stale value in the environment, where it
+          // wins over the .env file the operator just edited.
+          dryRunSource: describeEnvSource("DRY_RUN"),
+          watchSnapshotAuto: config.WATCH_SNAPSHOT_AUTO,
+          snapshotTestSpace: config.SNAPSHOT_TEST_SPACE || null,
           allowedSnapshotSpaces:
             config.ALLOWED_SNAPSHOT_SPACES.length > 0
               ? config.ALLOWED_SNAPSHOT_SPACES
@@ -68,6 +75,12 @@ export function registerSafeTools(server: McpServer, config: Config): void {
             config.ALLOWED_GOVERNORS.length > 0 ? config.ALLOWED_GOVERNORS : "all",
         },
         [
+          config.DRY_RUN
+            ? `DRY_RUN is ON, read from ${describeEnvSource("DRY_RUN")}: no vote will be ` +
+              "submitted. If you meant it to be off and it is coming from the process " +
+              "environment, the MCP client is passing a cached value and needs its " +
+              "server entry updated, not just a restart."
+            : "DRY_RUN is off: votes are real.",
           isOwner
             ? threshold === 1
               ? "The agent signer is an owner and the threshold is 1, so it can cast votes on its own."
