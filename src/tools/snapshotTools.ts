@@ -499,11 +499,7 @@ export function registerSnapshotTools(server: McpServer, config: Config): void {
 
       const messageClient = await getMessageClient(config);
       // Safe Transaction Service validates EIP-712 JSON and rejects payloads that
-      // omit EIP712Domain from `types`. The cryptographic hash is identical with
-      // or without it (viem + Safe hashSafeMessage agree), but ethers — which the
-      // Snapshot hub uses — treats an unused EIP712Domain as ambiguous. So we
-      // attach EIP712Domain only for the Safe message service, and submit the
-      // original typedData (Vote-only types) to Snapshot.
+      // omit EIP712Domain from `types`.
       const typedDataForSafe = {
         ...typedData,
         types: {
@@ -536,7 +532,7 @@ export function registerSnapshotTools(server: McpServer, config: Config): void {
         ));
       } catch (error) {
         // Record the attempt either way: a queued vote still needs following up,
-        // and a failure should be visible in the log rather than only in chat.
+        // and a failure should be visible in the log.
         await record(
           error instanceof ThresholdNotMetError ? "queued" : "failed",
           {
