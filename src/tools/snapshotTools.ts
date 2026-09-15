@@ -498,7 +498,21 @@ export function registerSnapshotTools(server: McpServer, config: Config): void {
       await assertAgentCanSign(config);
 
       const messageClient = await getMessageClient(config);
-      const created = await messageClient.sendOffChainMessage({ message: typedData });
+      // Safe Transaction Service validates EIP-712 JSON and rejects payloads that
+      // omit EIP712Domain from `types`.
+      const typedDataForSafe = {
+        ...typedData,
+        types: {
+          ...typedData.types,
+          EIP712Domain: [
+            { name: "name", type: "string" },
+            { name: "version", type: "string" },
+          ],
+        },
+      };
+      const created = await messageClient.sendOffChainMessage({
+        message: typedDataForSafe,
+      });
       const messageHash = created.messages?.messageHash;
 
       if (!messageHash) {
@@ -518,7 +532,7 @@ export function registerSnapshotTools(server: McpServer, config: Config): void {
         ));
       } catch (error) {
         // Record the attempt either way: a queued vote still needs following up,
-        // and a failure should be visible in the log rather than only in chat.
+        // and a failure should be visible in the log.
         await record(
           error instanceof ThresholdNotMetError ? "queued" : "failed",
           {
