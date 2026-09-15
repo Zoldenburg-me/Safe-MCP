@@ -498,7 +498,25 @@ export function registerSnapshotTools(server: McpServer, config: Config): void {
       await assertAgentCanSign(config);
 
       const messageClient = await getMessageClient(config);
-      const created = await messageClient.sendOffChainMessage({ message: typedData });
+      // Safe Transaction Service validates EIP-712 JSON and rejects payloads that
+      // omit EIP712Domain from `types`. The cryptographic hash is identical with
+      // or without it (viem + Safe hashSafeMessage agree), but ethers — which the
+      // Snapshot hub uses — treats an unused EIP712Domain as ambiguous. So we
+      // attach EIP712Domain only for the Safe message service, and submit the
+      // original typedData (Vote-only types) to Snapshot.
+      const typedDataForSafe = {
+        ...typedData,
+        types: {
+          ...typedData.types,
+          EIP712Domain: [
+            { name: "name", type: "string" },
+            { name: "version", type: "string" },
+          ],
+        },
+      };
+      const created = await messageClient.sendOffChainMessage({
+        message: typedDataForSafe,
+      });
       const messageHash = created.messages?.messageHash;
 
       if (!messageHash) {
