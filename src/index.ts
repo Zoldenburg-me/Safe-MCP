@@ -7,6 +7,7 @@ import { assertSafeServiceConfigured, getAgentAddress } from "./safe.js";
 import { getChainName } from "./chains.js";
 import { registerSafeTools } from "./tools/safeTools.js";
 import { registerSnapshotTools } from "./tools/snapshotTools.js";
+import { registerSnapshotXTools } from "./tools/snapshotXTools.js";
 import { registerGovernorTools } from "./tools/governorTools.js";
 import { registerLogTools } from "./tools/logTools.js";
 import { registerPolicyResources, registerPrompts } from "./prompts.js";
@@ -37,6 +38,14 @@ power, and record a substantive reason with the vote. If the operator has
 configured voting-policy resources, read them and vote to that policy. Check
 vote_log for how this Safe voted before, so decisions stay consistent.
 
+If the Safe is the controller of an on-chain Snapshot X (snapshot.box) space,
+it can also veto proposals there: snapshot_x_cancel_proposal proposes
+Space.cancel(proposalId) straight to the Safe, replacing the manual
+WalletConnect-into-the-Safe flow. Above threshold 1 the transaction waits in
+the Safe queue and the tool reports the exact to/data/value the other owners
+should verify before signing. snapshot_x_proposal reads a proposal's live
+state and confirms the cancellation afterwards.
+
 If DRY_RUN is on, nothing is signed or submitted: the vote tools return the
 payload they would have sent, including when the vote would be rejected, and say
 so. safe_info reports whether it is on and where that setting came from.
@@ -61,6 +70,7 @@ async function main(): Promise<void> {
 
   registerSafeTools(server, config);
   registerSnapshotTools(server, config);
+  registerSnapshotXTools(server, config);
   registerGovernorTools(server, config);
   registerLogTools(server, config);
   registerPolicyResources(server, config);
