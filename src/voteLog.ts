@@ -7,7 +7,7 @@ export type VoteOutcome = "submitted" | "queued" | "failed" | "dry-run";
 export interface VoteLogEntry {
   /** ISO timestamp of the attempt. */
   at: string;
-  platform: "snapshot" | "governor";
+  platform: "snapshot" | "snapshot-x" | "governor";
   outcome: VoteOutcome;
   safeAddress: string;
   chainId: number;
@@ -82,7 +82,7 @@ export async function readVoteLog(config: Config): Promise<VoteLogEntry[]> {
 }
 
 export interface VoteLogQuery {
-  platform?: "snapshot" | "governor";
+  platform?: "snapshot" | "snapshot-x" | "governor";
   venue?: string;
   proposalId?: string;
   outcome?: VoteOutcome;
