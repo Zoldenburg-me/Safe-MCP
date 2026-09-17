@@ -107,6 +107,20 @@ async function hubQuery<T>(
   return body.data;
 }
 
+/**
+ * Runs an arbitrary caller-written GraphQL query against the Snapshot hub.
+ * The hub's GraphQL endpoint is read-only — every write on Snapshot goes
+ * through the sequencer with a signature — so exposing it whole adds reach,
+ * not risk.
+ */
+export function rawQuery(
+  config: Config,
+  query: string,
+  variables: Record<string, unknown> = {}
+): Promise<unknown> {
+  return hubQuery<unknown>(config, query, variables);
+}
+
 export async function listProposals(
   config: Config,
   args: { space: string; state?: "active" | "pending" | "closed" | "all"; limit: number }
