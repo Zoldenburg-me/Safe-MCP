@@ -17,11 +17,11 @@ export function registerLogTools(server: McpServer, config: Config): void {
         "votes consistently with its own precedent, and to check whether a proposal " +
         "has already been handled.",
       inputSchema: {
-        platform: z.enum(["snapshot", "governor"]).optional(),
+        platform: z.enum(["snapshot", "snapshot-x", "governor"]).optional(),
         venue: z
           .string()
           .optional()
-          .describe("Snapshot space id, or Governor contract address"),
+          .describe("Snapshot space id, Snapshot X space contract, or Governor contract address"),
         proposalId: z.string().optional(),
         outcome: z.enum(["submitted", "queued", "failed", "dry-run"]).optional(),
         limit: z.number().int().min(1).max(100).default(20),

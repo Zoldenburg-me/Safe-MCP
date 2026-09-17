@@ -251,6 +251,42 @@ Safe supports refunding the executor out of the Safe's own balance, via the
 `gasPrice`, `gasToken` and `refundReceiver` transaction fields. Safe-MPC leaves
 those at zero, so no refund happens and the accounting stays simple.
 
+## Vetoing a Snapshot X proposal
+
+Snapshot X (snapshot.box) is Snapshot's fully on-chain protocol: a space is a
+contract, and cancelling a proposal means the space's **controller** — usually
+the DAO's Safe — calling `cancel(proposalId)` on it. Done by hand, that is the
+worst flow in DAO operations: someone opens app.safe.global, bridges
+snapshot.box into the Safe over WalletConnect, double-checks they are acting as
+the Safe and not their own wallet, clicks Cancel proposal, signs, and then
+posts the calldata in the group chat so every co-signer can verify the bytes
+before confirming.
+
+`snapshot_x_cancel_proposal` collapses the first half of that into one call.
+Given a snapshot.box proposal URL — or the space and proposal number — it
+verifies the Safe is the space controller, simulates the cancel from the Safe's
+address so the chain itself vets the call, then proposes the transaction to the
+Safe:
+
+```
+> Cancel https://snapshot.box/#/eth:0x594E…/proposal/3 — it duplicates #2.
+
+  snapshot_x_proposal        → status VotingPeriod, this Safe controls the space
+  snapshot_x_cancel_proposal → queued as 0xf00…, needs 4 more of 5 signatures
+```
+
+At threshold 1 the cancel executes immediately. Above that, the tool reports
+the queued `safeTxHash`, a link to the Safe's queue, and the exact
+`to` / `data` / `value` the transaction must show — the same checklist
+co-signers used to assemble by hand, now generated from the transaction that
+was actually proposed. The other owners just open the queue, compare, and
+confirm; the final signature executes the cancel. `snapshot_x_proposal` read
+afterwards confirms the proposal is `Cancelled`.
+
+Every attempt is recorded in the vote log with platform `snapshot-x`, and
+`DRY_RUN` behaves as everywhere else: the tool returns the transaction it would
+have proposed, blockers included, without signing anything.
+
 ## Tools
 
 | Tool | Reads or writes | What it does |
@@ -265,6 +301,8 @@ those at zero, so no refund happens and the accounting stays simple.
 | `snapshot_voting_power` | read | The Safe's voting power on one proposal, by strategy. |
 | `snapshot_vote` | write | Casts an off-chain Snapshot vote as the Safe. Needs the API key. |
 | `snapshot_submit_pending_vote` | write | Submits a vote whose Safe message needed more signatures. Needs the API key. |
+| `snapshot_x_proposal` | read | A Snapshot X proposal's live status, read from the space contract, and whether this Safe controls the space. No API key. |
+| `snapshot_x_cancel_proposal` | write | Vetoes a Snapshot X proposal by proposing `Space.cancel` from the Safe. Needs the API key. |
 | `governor_find_proposals` | read | On-chain proposals, read from `ProposalCreated` logs. No API key. |
 | `governor_list_proposals` | read | Legacy: proposals via a hosted indexer API. Needs a key. |
 | `governor_get_proposal` | read | Legacy: title, description and vote counts via the same API. |
@@ -470,12 +508,14 @@ src/
   duration.ts         Duration parsing for the config
   platforms/
     snapshot.ts       Hub queries, EIP-712 vote types, sequencer submission
+    snapshotX.ts      Snapshot X space ABI, cancel calldata, on-chain reads
     governor.ts       Governor ABI, calldata encoding, on-chain state reads
     governorIndexer.ts  On-chain discovery from ProposalCreated logs
     tally.ts          Legacy hosted-indexer client, superseded by governorIndexer
   tools/
     safeTools.ts      safe_*
     snapshotTools.ts  snapshot_*
+    snapshotXTools.ts snapshot_x_*
     governorTools.ts  governor_*
     logTools.ts       vote_log, vote_schedule
     shared.ts         Tool result helpers and the in-band error guard
