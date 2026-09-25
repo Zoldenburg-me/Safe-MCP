@@ -299,6 +299,7 @@ have proposed, blockers included, without signing anything.
 | `snapshot_list_proposals` | read | Proposals in a space, open ones by default. |
 | `snapshot_get_proposal` | read | Full body, indexed choices, scores, the Safe's voting power, and any vote it already cast. |
 | `snapshot_voting_power` | read | The Safe's voting power on one proposal, by strategy. |
+| `snapshot_query` | read | Any GraphQL query against the Snapshot hub, for everything the fixed reads don't cover. Query operations only; responses over 1 MB are refused. |
 | `snapshot_vote` | write | Casts an off-chain Snapshot vote as the Safe. Needs the API key. |
 | `snapshot_submit_pending_vote` | write | Submits a vote whose Safe message needed more signatures. Needs the API key. |
 | `snapshot_x_proposal` | read | A Snapshot X proposal's live status, read from the space contract, and whether this Safe controls the space. No API key. |

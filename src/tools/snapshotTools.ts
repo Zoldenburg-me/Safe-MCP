@@ -231,6 +231,55 @@ export function registerSnapshotTools(server: McpServer, config: Config): void {
   );
 
   server.registerTool(
+    "snapshot_query",
+    {
+      title: "Run a GraphQL query against the Snapshot hub",
+      description:
+        "Runs any GraphQL query against the Snapshot hub API — spaces, proposals, " +
+        "votes, follows, users, strategies, anything the schema exposes — for " +
+        "questions the fixed read tools do not cover (a space's full vote history, " +
+        "who follows it, strategy parameters, cross-space voter lookups). The " +
+        "tool only sends query operations — mutations and subscriptions are " +
+        "rejected. Use `first`/`skip` and select only the fields you need: responses " +
+        "over 1 MB are refused, and results over 50k characters are truncated. " +
+        "Schema reference: https://docs.snapshot.box.",
+      inputSchema: {
+        query: z
+          .string()
+          .max(10_000)
+          .describe('GraphQL query, e.g. "query { space(id: \\"ens.eth\\") { name followersCount } }"'),
+        variables: z
+          .record(z.string(), z.unknown())
+          .optional()
+          .describe("Values for the query's $variables, if it declares any"),
+      },
+      annotations: { readOnlyHint: true, openWorldHint: true },
+    },
+    guard(async ({ query, variables }) => {
+      const data = await snapshot.rawQuery(config, query, variables ?? {});
+
+      // rawQuery already refuses responses over 1 MB while reading them; this
+      // is the tighter cap on what flows back into the agent's context.
+      const MAX_CHARS = 50_000;
+      const rendered = JSON.stringify(data, null, 2) ?? "null";
+
+      if (rendered.length > MAX_CHARS) {
+        return json(
+          {
+            truncated: true,
+            totalChars: rendered.length,
+            data: `${rendered.slice(0, MAX_CHARS)}…`,
+          },
+          `The result is ${rendered.length} characters and was truncated to ${MAX_CHARS}. ` +
+            "Narrow the query: select fewer fields, or page with first/skip."
+        );
+      }
+
+      return json({ truncated: false, data });
+    })
+  );
+
+  server.registerTool(
     "snapshot_list_proposals",
     {
       title: "List Snapshot proposals",
