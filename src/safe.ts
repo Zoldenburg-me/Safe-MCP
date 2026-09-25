@@ -65,6 +65,8 @@ const SAFE_CLIENT_TOOLS = [
   "safe_confirm_transaction",
   "snapshot_vote",
   "snapshot_submit_pending_vote",
+  "snapshot_x_vote",
+  "snapshot_x_cancel_proposal",
   "governor_vote",
 ].join(", ");
 
