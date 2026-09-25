@@ -16,12 +16,17 @@ const INSTRUCTIONS = `
 Safe-MPC connects a Safe smart-account wallet to you so you can vote on DAO
 proposals as that Safe.
 
-Two voting paths:
+Three voting paths:
 - Snapshot, off-chain and gasless. The Safe signs an EIP-712 vote, the Safe
   Transaction Service assembles an EIP-1271 signature, and the vote goes to the
   Snapshot sequencer. A later vote on the same proposal replaces the earlier one.
 - On-chain Governor (OpenZeppelin or Compound Bravo, as indexed by Tally). The
   Safe executes castVoteWithReason. This costs gas and is final once mined.
+- Snapshot X (snapshot.box), fully on-chain. snapshot_x_vote has the Safe call
+  the space's EthTx authenticator, which forwards Space.vote with the Safe as
+  voter. Choices are for, against and abstain. This costs gas and is final:
+  Snapshot X has no revote. snapshot_x_proposal shows the Safe's voting power
+  and whether it already voted; read it first.
 
 You do not need to be told where this Safe votes. snapshot_spaces_with_voting_power
 finds every Snapshot space it holds voting power in — from the spaces it follows,

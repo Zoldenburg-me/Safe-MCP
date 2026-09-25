@@ -1,8 +1,17 @@
 import { strict as assert } from "node:assert";
 import { describe, it } from "node:test";
+import { Interface } from "ethers";
+import { decodeFunctionData, toFunctionSelector, type Address } from "viem";
 import {
+  activeStrategyIndices,
+  CHOICE_VALUE,
   chainShortName,
+  DEFAULT_ETH_TX_AUTHENTICATOR,
   encodeCancel,
+  encodeEthTxVote,
+  encodeSpaceVote,
+  ETH_TX_AUTHENTICATOR_ABI,
+  pinReason,
   FINALIZATION_STATUS,
   parseSpaceRef,
   PROPOSAL_STATUS,
@@ -75,5 +84,114 @@ describe("Snapshot X status labels", () => {
     assert.deepEqual([...FINALIZATION_STATUS], ["Pending", "Executed", "Cancelled"]);
     assert.equal(PROPOSAL_STATUS[6], "Cancelled");
     assert.equal(PROPOSAL_STATUS[1], "VotingPeriod");
+  });
+});
+
+const SAFE = "0x1111111111111111111111111111111111111111" as Address;
+
+describe("Snapshot X vote calldata", () => {
+  const vote = {
+    space: SPACE as Address,
+    voter: SAFE,
+    proposalId: 7,
+    choice: "for" as const,
+    strategies: [
+      { index: 0, params: "0x00" as const },
+      { index: 2, params: "0x00" as const },
+    ],
+    metadataUri: "ipfs://bafkreitest",
+  };
+
+  it("targets the selector the EthTx authenticator whitelists", () => {
+    // Authenticator.sol: VOTE_SELECTOR = keccak256("vote(address,uint256,uint8,(uint8,bytes)[],string)")
+    assert.equal(
+      encodeSpaceVote(vote).slice(0, 10),
+      toFunctionSelector("vote(address,uint256,uint8,(uint8,bytes)[],string)")
+    );
+  });
+
+  it("matches the authenticate() call sx.js builds for an EthTx vote", () => {
+    // Mirrors sx.js EthereumTx.vote: encode Space.vote with ethers, split off
+    // the selector, and pass (space, selector, args) to authenticate.
+    const space = new Interface([
+      "function vote(address voter, uint256 proposalId, uint8 choice, tuple(uint8 index, bytes params)[] userVotingStrategies, string metadataURI)",
+    ]);
+    const functionData = space.encodeFunctionData("vote", [
+      SAFE,
+      7,
+      1,
+      [
+        { index: 0, params: "0x00" },
+        { index: 2, params: "0x00" },
+      ],
+      "ipfs://bafkreitest",
+    ]);
+    const auth = new Interface([
+      "function authenticate(address target, bytes4 functionSelector, bytes data)",
+    ]);
+    const expected = auth.encodeFunctionData("authenticate", [
+      SPACE,
+      functionData.slice(0, 10),
+      `0x${functionData.slice(10)}`,
+    ]);
+
+    assert.equal(encodeEthTxVote(vote), expected);
+  });
+
+  it("forwards the Safe as voter, so EthTxAuthenticator accepts it from the Safe", () => {
+    const { functionName, args } = decodeFunctionData({
+      abi: ETH_TX_AUTHENTICATOR_ABI,
+      data: encodeEthTxVote(vote),
+    });
+    assert.equal(functionName, "authenticate");
+    assert.equal(args[0], SPACE);
+    // The first argument word of the forwarded vote is the voter.
+    assert.equal(args[2].slice(0, 66).toLowerCase(), `0x${SAFE.slice(2).padStart(64, "0")}`);
+  });
+
+  it("uses the sx-evm Choice order, which is not the Governor's", () => {
+    assert.deepEqual(CHOICE_VALUE, { against: 0, for: 1, abstain: 2 });
+  });
+
+  it("defaults to the snapshot.box EthTx authenticator", () => {
+    assert.equal(DEFAULT_ETH_TX_AUTHENTICATOR, "0xBA06E6cCb877C332181A6867c05c8b746A21Aed1");
+  });
+});
+
+describe("Snapshot X active strategies", () => {
+  it("reads the proposal's strategy bitmask lowest index first", () => {
+    assert.deepEqual(activeStrategyIndices(0n), []);
+    assert.deepEqual(activeStrategyIndices(1n), [0]);
+    assert.deepEqual(activeStrategyIndices(0b1011n), [0, 1, 3]);
+    assert.deepEqual(activeStrategyIndices(1n << 255n), [255]);
+  });
+});
+
+describe("Snapshot X vote reasons", () => {
+  it("pins the reason through pineapple and returns an ipfs:// URI", async () => {
+    let sent: unknown;
+    const fakeFetch = (async (_url: string, init: RequestInit) => {
+      sent = JSON.parse(String(init.body));
+      return new Response(JSON.stringify({ result: { provider: "4everland", cid: "bafkreiabc" } }));
+    }) as unknown as typeof fetch;
+
+    assert.equal(await pinReason("Supports the grant.", fakeFetch), "ipfs://bafkreiabc");
+    assert.deepEqual(sent, {
+      jsonrpc: "2.0",
+      method: "pin",
+      params: { reason: "Supports the grant." },
+      protocol: "ipfs",
+      id: null,
+    });
+  });
+
+  it("returns null rather than failing the vote when pinning fails", async () => {
+    const down = (async () => {
+      throw new Error("offline");
+    }) as unknown as typeof fetch;
+    const bad = (async () => new Response("nope", { status: 502 })) as unknown as typeof fetch;
+
+    assert.equal(await pinReason("x", down), null);
+    assert.equal(await pinReason("x", bad), null);
   });
 });
