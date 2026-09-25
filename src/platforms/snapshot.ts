@@ -165,39 +165,56 @@ async function hubQuery<T>(
 /**
  * Rejects a GraphQL document containing any operation other than a query.
  *
- * Only the operation type of each top-level definition is inspected, after
- * comments and string literals are blanked out, so a field, argument or
- * operation *named* "mutation" is still allowed.
+ * Scans the document once, left to right, with the GraphQL spec's lexing
+ * rules for comments, strings and block strings (including the `\"""`
+ * escape), so it agrees with the hub's parser about what is code. Only the
+ * operation type of each top-level definition is inspected, so a field,
+ * argument or operation *named* "mutation" is still allowed.
  */
 export function assertQueryOnly(document: string): void {
-  const source = document
-    .replace(/"""[\s\S]*?"""/g, (m) => " ".repeat(m.length))
-    .replace(/"(?:\\.|[^"\\\n])*"/g, (m) => " ".repeat(m.length))
-    .replace(/#[^\n]*/g, (m) => " ".repeat(m.length));
-
+  const src = document;
   let braces = 0;
   let parens = 0;
   let expectDefinition = true;
+  let i = 0;
 
-  for (let i = 0; i < source.length; i += 1) {
-    const ch = source[i]!;
+  while (i < src.length) {
+    const ch = src[i]!;
 
-    if (ch === "{") {
+    if (ch === "#") {
+      while (i < src.length && src[i] !== "\n" && src[i] !== "\r") i += 1;
+    } else if (src.startsWith('"""', i)) {
+      i += 3;
+      while (i < src.length && !src.startsWith('"""', i)) {
+        i += src.startsWith('\\"""', i) ? 4 : 1;
+      }
+      i += 3;
+    } else if (ch === '"') {
+      i += 1;
+      while (i < src.length && src[i] !== '"' && src[i] !== "\n" && src[i] !== "\r") {
+        i += src[i] === "\\" ? 2 : 1;
+      }
+      i += 1;
+    } else if (ch === "{") {
       braces += 1;
       expectDefinition = false;
+      i += 1;
     } else if (ch === "}") {
       braces -= 1;
       if (braces === 0 && parens === 0) expectDefinition = true;
+      i += 1;
     } else if (ch === "(") {
       parens += 1;
+      i += 1;
     } else if (ch === ")") {
       parens -= 1;
+      i += 1;
     } else if (/[A-Za-z_]/.test(ch)) {
       let end = i + 1;
-      while (end < source.length && /[A-Za-z0-9_]/.test(source[end]!)) end += 1;
+      while (end < src.length && /[A-Za-z0-9_]/.test(src[end]!)) end += 1;
 
       if (expectDefinition && braces === 0 && parens === 0) {
-        const keyword = source.slice(i, end);
+        const keyword = src.slice(i, end);
         if (keyword === "mutation" || keyword === "subscription") {
           throw new Error(
             `snapshot_query runs read-only queries only; the document contains a ${keyword}. ` +
@@ -206,7 +223,9 @@ export function assertQueryOnly(document: string): void {
         }
         expectDefinition = false;
       }
-      i = end - 1;
+      i = end;
+    } else {
+      i += 1;
     }
   }
 }

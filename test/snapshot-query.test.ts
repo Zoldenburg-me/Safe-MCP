@@ -58,6 +58,26 @@ describe("snapshot_query read-only guard", () => {
     );
   });
 
+  it("sees a mutation hidden behind an escaped triple quote in a block string", () => {
+    // The block string ends at the last """, so the mutation is real code.
+    assert.throws(
+      () => assertQueryOnly('query { f(a: """\\""" """) } mutation M { x } # """'),
+      /mutation/
+    );
+  });
+
+  it("sees a mutation between comments that contain quotes", () => {
+    assert.throws(() => assertQueryOnly('# """\nmutation M { x }\n# """\nquery { a }'), /mutation/);
+    assert.throws(() => assertQueryOnly('# "\nmutation M { x }\n# "'), /mutation/);
+  });
+
+  it("still allows mutations that really are inside strings", () => {
+    assert.doesNotThrow(() =>
+      assertQueryOnly('query { f(a: """ \\""" mutation M { x } """) }')
+    );
+    assert.doesNotThrow(() => assertQueryOnly('query { f(a: "\\" mutation M { x }") }'));
+  });
+
   it("rejects before any request is made", async () => {
     let called = false;
     globalThis.fetch = (async () => {
