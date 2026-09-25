@@ -239,9 +239,10 @@ export function registerSnapshotTools(server: McpServer, config: Config): void {
         "votes, follows, users, strategies, anything the schema exposes — for " +
         "questions the fixed read tools do not cover (a space's full vote history, " +
         "who follows it, strategy parameters, cross-space voter lookups). The " +
-        "endpoint is read-only: writes on Snapshot go through the sequencer, never " +
-        "GraphQL. Use `first`/`skip` and select only the fields you need; large " +
-        "results are truncated. Schema reference: https://docs.snapshot.box.",
+        "tool only sends query operations — mutations and subscriptions are " +
+        "rejected. Use `first`/`skip` and select only the fields you need: responses " +
+        "over 1 MB are refused, and results over 50k characters are truncated. " +
+        "Schema reference: https://docs.snapshot.box.",
       inputSchema: {
         query: z
           .string()
@@ -257,8 +258,8 @@ export function registerSnapshotTools(server: McpServer, config: Config): void {
     guard(async ({ query, variables }) => {
       const data = await snapshot.rawQuery(config, query, variables ?? {});
 
-      // A broad query can return megabytes; cap what flows back into the
-      // agent's context and say so, rather than silently flooding it.
+      // rawQuery already refuses responses over 1 MB while reading them; this
+      // is the tighter cap on what flows back into the agent's context.
       const MAX_CHARS = 50_000;
       const rendered = JSON.stringify(data, null, 2) ?? "null";
 
