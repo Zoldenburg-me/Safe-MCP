@@ -73,11 +73,55 @@ const PROPOSAL_FIELDS = `
   space { id name }
 `;
 
+/** Upper bound on a caller-written query's response, enforced while reading. */
+export const RAW_QUERY_MAX_BYTES = 1_000_000;
+
+/**
+ * Reads a response body as text, aborting as soon as it passes `maxBytes`,
+ * so an oversized response is never fully downloaded or parsed.
+ */
+export async function readBodyCapped(
+  response: Response,
+  maxBytes: number
+): Promise<string> {
+  const declared = Number(response.headers.get("content-length"));
+  if (Number.isFinite(declared) && declared > maxBytes) {
+    await response.body?.cancel().catch(() => undefined);
+    throw new Error(
+      `Snapshot hub response is ${declared} bytes, over the ${maxBytes}-byte limit. ` +
+        "Narrow the query: select fewer fields, or page with first/skip."
+    );
+  }
+
+  if (!response.body) return "";
+
+  const reader = response.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let received = 0;
+
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    received += value.byteLength;
+    if (received > maxBytes) {
+      await reader.cancel().catch(() => undefined);
+      throw new Error(
+        `Snapshot hub response exceeded the ${maxBytes}-byte limit. ` +
+          "Narrow the query: select fewer fields, or page with first/skip."
+      );
+    }
+    chunks.push(value);
+  }
+
+  return new TextDecoder().decode(Buffer.concat(chunks));
+}
+
 /** Minimal GraphQL client for the Snapshot hub. */
 async function hubQuery<T>(
   config: Config,
   query: string,
-  variables: Record<string, unknown>
+  variables: Record<string, unknown>,
+  options: { maxBytes?: number } = {}
 ): Promise<T> {
   const response = await fetch(`${config.SNAPSHOT_HUB_URL}/graphql`, {
     method: "POST",
@@ -86,12 +130,23 @@ async function hubQuery<T>(
   });
 
   if (!response.ok) {
+    const detail =
+      options.maxBytes === undefined
+        ? await response.text()
+        : await readBodyCapped(response, options.maxBytes).catch(
+            (error: unknown) => (error instanceof Error ? error.message : String(error))
+          );
     throw new Error(
-      `Snapshot hub returned ${response.status} ${response.statusText}: ${await response.text()}`
+      `Snapshot hub returned ${response.status} ${response.statusText}: ${detail.slice(0, 2_000)}`
     );
   }
 
-  const body = (await response.json()) as {
+  const text =
+    options.maxBytes === undefined
+      ? await response.text()
+      : await readBodyCapped(response, options.maxBytes);
+
+  const body = JSON.parse(text) as {
     data?: T;
     errors?: Array<{ message: string }>;
   };
@@ -105,6 +160,89 @@ async function hubQuery<T>(
   if (!body.data) throw new Error("Snapshot hub returned no data");
 
   return body.data;
+}
+
+/**
+ * Rejects a GraphQL document containing any operation other than a query.
+ *
+ * Scans the document once, left to right, with the GraphQL spec's lexing
+ * rules for comments, strings and block strings (including the `\"""`
+ * escape), so it agrees with the hub's parser about what is code. Only the
+ * operation type of each top-level definition is inspected, so a field,
+ * argument or operation *named* "mutation" is still allowed.
+ */
+export function assertQueryOnly(document: string): void {
+  const src = document;
+  let braces = 0;
+  let parens = 0;
+  let expectDefinition = true;
+  let i = 0;
+
+  while (i < src.length) {
+    const ch = src[i]!;
+
+    if (ch === "#") {
+      while (i < src.length && src[i] !== "\n" && src[i] !== "\r") i += 1;
+    } else if (src.startsWith('"""', i)) {
+      i += 3;
+      while (i < src.length && !src.startsWith('"""', i)) {
+        i += src.startsWith('\\"""', i) ? 4 : 1;
+      }
+      i += 3;
+    } else if (ch === '"') {
+      i += 1;
+      while (i < src.length && src[i] !== '"' && src[i] !== "\n" && src[i] !== "\r") {
+        i += src[i] === "\\" ? 2 : 1;
+      }
+      i += 1;
+    } else if (ch === "{") {
+      braces += 1;
+      expectDefinition = false;
+      i += 1;
+    } else if (ch === "}") {
+      braces -= 1;
+      if (braces === 0 && parens === 0) expectDefinition = true;
+      i += 1;
+    } else if (ch === "(") {
+      parens += 1;
+      i += 1;
+    } else if (ch === ")") {
+      parens -= 1;
+      i += 1;
+    } else if (/[A-Za-z_]/.test(ch)) {
+      let end = i + 1;
+      while (end < src.length && /[A-Za-z0-9_]/.test(src[end]!)) end += 1;
+
+      if (expectDefinition && braces === 0 && parens === 0) {
+        const keyword = src.slice(i, end);
+        if (keyword === "mutation" || keyword === "subscription") {
+          throw new Error(
+            `snapshot_query runs read-only queries only; the document contains a ${keyword}. ` +
+              "Snapshot writes go through the vote tools, which sign as the Safe."
+          );
+        }
+        expectDefinition = false;
+      }
+      i = end;
+    } else {
+      i += 1;
+    }
+  }
+}
+
+/**
+ * Runs an arbitrary caller-written GraphQL query against the Snapshot hub.
+ * Only query operations are sent, and the response is capped at
+ * RAW_QUERY_MAX_BYTES while it is read, so a broad query fails fast instead
+ * of being downloaded and parsed in full.
+ */
+export async function rawQuery(
+  config: Config,
+  query: string,
+  variables: Record<string, unknown> = {}
+): Promise<unknown> {
+  assertQueryOnly(query);
+  return hubQuery<unknown>(config, query, variables, { maxBytes: RAW_QUERY_MAX_BYTES });
 }
 
 export async function listProposals(
