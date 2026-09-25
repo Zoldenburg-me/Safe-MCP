@@ -251,6 +251,47 @@ Safe supports refunding the executor out of the Safe's own balance, via the
 `gasPrice`, `gasToken` and `refundReceiver` transaction fields. Safe-MPC leaves
 those at zero, so no refund happens and the accounting stays simple.
 
+## Voting on Snapshot X
+
+Snapshot X (snapshot.box) is Snapshot's fully on-chain protocol. Its gasless
+path has the voter sign an EIP-712 message for a relayer, which a Safe cannot
+do on its own; the path snapshot.box offers smart-contract wallets is a plain
+transaction instead. `snapshot_x_vote` takes that path: the Safe calls the
+space's **EthTx authenticator**, which checks the voter is the caller and
+forwards `Space.vote(safe, proposalId, choice, strategies, metadataURI)`.
+
+```
+> Vote for https://snapshot.box/#/eth:0x594E…/proposal/7 — it funds the audit.
+
+  snapshot_x_proposal → VotingPeriod, Safe power 12000 across strategy 0, not voted
+  snapshot_x_vote     → executed 0xabc…, For with power 12000
+```
+
+Before anything is signed, the tool:
+
+- reads the proposal and requires it to be open (`VotingPeriod` or
+  `VotingPeriodAccepted`) and not already voted on by the Safe;
+- evaluates every strategy active on the proposal at its snapshot block, the
+  same `getVotingPower` call the space makes, and submits only those that give
+  the Safe power (a strategy that reverts would revert the whole vote);
+- checks the space whitelists the authenticator (by default snapshot.box's EthTx
+  deployment, `0xBA06…Aed1`, on every standard network);
+- simulates `authenticate(...)` from the Safe's address, so the chain itself
+  vets the vote.
+
+Choices are `for`, `against` and `abstain` (sx-evm values 1, 0 and 2 — not the
+Governor order). A reason is pinned to IPFS through pineapple.fyi, Snapshot's
+pinning service, and attached as the vote's metadata URI, which is how
+snapshot.box displays it; if pinning fails the vote still goes through and the
+reason stays in the local vote log. Like a Governor vote, this costs gas, and
+**Snapshot X votes are final**: there is no revote.
+
+Vanilla, Comp and OZ Votes strategies need no input. A merkle-whitelist or
+ApeGas strategy needs a per-voter proof; pass it as `strategyParams`
+(`[{ index, params }]`), and the tool reports any strategy it had to leave out.
+At threshold 1 the vote executes immediately; above that it queues on the Safe
+like the cancel below, with the `to` / `data` / `value` co-signers should check.
+
 ## Vetoing a Snapshot X proposal
 
 Snapshot X (snapshot.box) is Snapshot's fully on-chain protocol: a space is a
@@ -302,7 +343,8 @@ have proposed, blockers included, without signing anything.
 | `snapshot_query` | read | Any GraphQL query against the Snapshot hub, for everything the fixed reads don't cover. Query operations only; responses over 1 MB are refused. |
 | `snapshot_vote` | write | Casts an off-chain Snapshot vote as the Safe. Needs the API key. |
 | `snapshot_submit_pending_vote` | write | Submits a vote whose Safe message needed more signatures. Needs the API key. |
-| `snapshot_x_proposal` | read | A Snapshot X proposal's live status, read from the space contract, and whether this Safe controls the space. No API key. |
+| `snapshot_x_proposal` | read | A Snapshot X proposal's live status and tally, the Safe's voting power and whether it voted, read from the space contract, and whether this Safe controls the space. No API key. |
+| `snapshot_x_vote` | write | Casts an on-chain Snapshot X vote as the Safe through the space's EthTx authenticator. Needs the API key. |
 | `snapshot_x_cancel_proposal` | write | Vetoes a Snapshot X proposal by proposing `Space.cancel` from the Safe. Needs the API key. |
 | `governor_find_proposals` | read | On-chain proposals, read from `ProposalCreated` logs. No API key. |
 | `governor_list_proposals` | read | Legacy: proposals via a hosted indexer API. Needs a key. |
@@ -509,7 +551,7 @@ src/
   duration.ts         Duration parsing for the config
   platforms/
     snapshot.ts       Hub queries, EIP-712 vote types, sequencer submission
-    snapshotX.ts      Snapshot X space ABI, cancel calldata, on-chain reads
+    snapshotX.ts      Snapshot X space ABI, vote and cancel calldata, on-chain reads
     governor.ts       Governor ABI, calldata encoding, on-chain state reads
     governorIndexer.ts  On-chain discovery from ProposalCreated logs
     tally.ts          Legacy hosted-indexer client, superseded by governorIndexer
