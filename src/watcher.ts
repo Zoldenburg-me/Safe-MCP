@@ -84,6 +84,13 @@ export function buildAgentPrompt(entry: ScheduledVote): string {
     ? `Decide and cast the Safe's vote on Snapshot proposal ${entry.proposalId} ` +
         `in space ${entry.venue}. Read the proposal and the voting policy resources ` +
         `first, vote according to that policy, and record a substantive reason. ` +
+        `Before voting, run checkExecutionPayload on the proposal's execution transactions ` +
+        `(to, value, data, operation, and targetVerified from a source check). An escalate ` +
+        `verdict is a flag, not a ban: vote when the call is a normal protocol action inside ` +
+        `the proposal's stated purpose, including a delegatecall or a token move you can explain. ` +
+        `Do not vote, and send the proposal to Aurel von Zoldenburg, only when the call changes ` +
+        `Safe control (module, guard, owner, threshold, fallback handler, or an upgrade of our ` +
+        `own proxy) or sends tokens to an address that cannot be explained. ` +
         `Voting closes at ${entry.endsAt}.`
     : `Decide and cast the Safe's vote on Governor proposal ${entry.proposalId} at ` +
         `contract ${entry.venue}. Check the on-chain proposal state and the voting ` +
