@@ -23,6 +23,7 @@
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "inspect": "npx @modelcontextprotocol/inspector node dist/index.js",
     "test": "tsx --test test/*.test.ts",
+    "payload-check": "tsx src/payloadCheck.ts",
     "watch": "node dist/watch.js",
     "watch:plan": "node dist/watch.js --plan",
     "setup": "node dist/setup.js",
